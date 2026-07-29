@@ -22,6 +22,7 @@ type Snapshot = {
     cores: number;
     memoryUsed: number;
     memoryTotal: number;
+    memoryCached: number;
     memoryPercent: number;
     uptime: number;
   };
@@ -49,7 +50,7 @@ type Snapshot = {
 };
 
 const empty: Snapshot = {
-  system: { hostname: "—", platform: "macOS", cpu: "正在连接本机代理", cpuPercent: 0, cores: 0, memoryUsed: 0, memoryTotal: 0, memoryPercent: 0, uptime: 0 },
+  system: { hostname: "—", platform: "macOS", cpu: "正在连接本机代理", cpuPercent: 0, cores: 0, memoryUsed: 0, memoryTotal: 0, memoryCached: 0, memoryPercent: 0, uptime: 0 },
   gpu: { name: "AMD Radeon", activity: 0, temperature: 0, power: 0, fan: 0, coreClock: 0, memoryClock: 0, vramUsed: 0, vramTotal: 0 },
   server: { status: "stopped", model: null, endpoint: "http://127.0.0.1:8080" },
   performance: { promptTps: 0, generationTps: 0, latencyMs: 0 },
@@ -294,7 +295,7 @@ export default function Home() {
             <div className="metric-copy memory-copy">
               <strong className="metric-title">{bytes(data.system.memoryUsed)}</strong>
               <div className="metric-details">
-                <span><small>已使用</small>{bytes(data.system.memoryUsed)}</span>
+                <span><small>文件缓存</small>{bytes(data.system.memoryCached)}</span>
                 <span><small>可用</small>{bytes(Math.max(0, data.system.memoryTotal - data.system.memoryUsed))}</span>
                 <span><small>总容量</small>{bytes(data.system.memoryTotal)}</span>
               </div>

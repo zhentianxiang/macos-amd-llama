@@ -143,6 +143,34 @@ function statNumber(text, key) {
   return match ? Number(match[1]) : 0;
 }
 
+function vmStatPages(text, key) {
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = text.match(new RegExp(`^"?${escaped}"?:\\s+(\\d+)\\.?$`, "m"));
+  return match ? Number(match[1]) : 0;
+}
+
+async function memoryInfo() {
+  const total = os.totalmem();
+  if (process.platform !== "darwin") {
+    const available = os.freemem();
+    const used = total - available;
+    return { used, total, cached: 0, percent: total ? used / total * 100 : 0 };
+  }
+
+  try {
+    const { stdout } = await execFileAsync("vm_stat");
+    const pageSize = Number(stdout.match(/page size of (\d+) bytes/i)?.[1] || 4096);
+    const free = vmStatPages(stdout, "Pages free") * pageSize;
+    const cached = vmStatPages(stdout, "File-backed pages") * pageSize;
+    const used = Math.max(0, Math.min(total, total - free - cached));
+    return { used, total, cached, percent: total ? used / total * 100 : 0 };
+  } catch {
+    const available = os.freemem();
+    const used = total - available;
+    return { used, total, cached: 0, percent: total ? used / total * 100 : 0 };
+  }
+}
+
 async function gpuInfo() {
   try {
     const [{ stdout: profiler }, { stdout: ioreg }] = await Promise.all([
@@ -206,9 +234,7 @@ async function externalModel() {
 }
 
 async function snapshot() {
-  const total = os.totalmem();
-  const free = os.freemem();
-  const [gpu, models, healthy] = await Promise.all([gpuInfo(), modelList(), health()]);
+  const [memory, gpu, models, healthy] = await Promise.all([memoryInfo(), gpuInfo(), modelList(), health()]);
   if (healthy) {
     serverState = "running";
     serverStartedAt = 0;
@@ -226,9 +252,10 @@ async function snapshot() {
       cpu: os.cpus()[0]?.model || "Intel CPU",
       cpuPercent: cpuPercent(),
       cores: os.cpus().length,
-      memoryUsed: total - free,
-      memoryTotal: total,
-      memoryPercent: ((total - free) / total) * 100,
+      memoryUsed: memory.used,
+      memoryTotal: memory.total,
+      memoryCached: memory.cached,
+      memoryPercent: memory.percent,
       uptime: os.uptime(),
     },
     gpu,
