@@ -2,6 +2,13 @@
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+if [[ -f "$PROJECT_ROOT/.env" ]]; then
+  set -a
+  source "$PROJECT_ROOT/.env"
+  set +a
+fi
+
 LLAMA_DIR="${LLAMA_DIR:-$PROJECT_ROOT/llama.cpp}"
 BUILD_DIR="${BUILD_DIR:-$LLAMA_DIR/build-vulkan}"
 

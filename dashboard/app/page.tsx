@@ -2,7 +2,15 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-const AGENT = process.env.NEXT_PUBLIC_AGENT_URL || "http://127.0.0.1:8090";
+const configuredAgent = process.env.NEXT_PUBLIC_AGENT_URL;
+const agentPort = process.env.NEXT_PUBLIC_AGENT_PORT || "8090";
+function agentUrl() {
+  if (configuredAgent) return configuredAgent;
+  const hostname = typeof window === "undefined" ? "127.0.0.1" : window.location.hostname;
+  return `http://${hostname}:${agentPort}`;
+}
+
+type ChatMessage = { role: "user" | "assistant"; content: string };
 
 type Snapshot = {
   system: {
@@ -35,8 +43,8 @@ type Snapshot = {
   };
   performance: { promptTps: number; generationTps: number; latencyMs: number; updatedAt?: string };
   models: Array<{ name: string; size: number; path: string; active: boolean }>;
-  downloads: Array<{ id: string; name: string; received: number; total: number; status: string; error?: string }>;
-  catalog: Array<{ id: string; name: string; file: string; sizeLabel: string; description: string }>;
+  downloads: Array<{ id: string; name: string; received: number; total: number; speed: number; currentFile: string; filesComplete: number; filesTotal: number; status: string; error?: string }>;
+  catalog: Array<{ id: string; name: string; file: string; sizeLabel: string; description: string; multimodal: boolean; installed: boolean }>;
 };
 
 const empty: Snapshot = {
@@ -52,15 +60,19 @@ function bytes(value: number) {
   return `${(value / 1024 ** 3).toFixed(value < 1024 ** 3 ? 2 : 1)} GB`;
 }
 
+function downloadSpeed(value: number) {
+  return value ? `${(value / 1024 ** 2).toFixed(1)} MB/s` : "0 MB/s";
+}
+
 function uptime(value: number) {
   const hours = Math.floor(value / 3600);
   return hours > 48 ? `${Math.floor(hours / 24)} 天` : `${hours} 小时`;
 }
 
-function Ring({ value, color = "#baff29", children }: { value: number; color?: string; children: React.ReactNode }) {
+function Ring({ value, color = "#287a4b", children }: { value: number; color?: string; children: React.ReactNode }) {
   const safe = Math.max(0, Math.min(100, value || 0));
   return (
-    <div className="ring" style={{ background: `conic-gradient(${color} ${safe * 3.6}deg, rgba(255,255,255,.08) 0deg)` }}>
+    <div className="ring" style={{ background: `conic-gradient(${color} ${safe * 3.6}deg, #dce9da 0deg)` }}>
       <div className="ring-core">{children}</div>
     </div>
   );
@@ -75,10 +87,15 @@ export default function Home() {
   const [connected, setConnected] = useState(false);
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState("");
+  const [chatInput, setChatInput] = useState("");
+  const [chatBusy, setChatBusy] = useState(false);
+  const [messages, setMessages] = useState<ChatMessage[]>([
+    { role: "assistant", content: "你好，我是当前运行在 AMD GPU 上的本地模型。启动模型后，可以直接在这里与我对话。" },
+  ]);
 
   const refresh = async () => {
     try {
-      const response = await fetch(`${AGENT}/api/status`, { cache: "no-store" });
+      const response = await fetch(`${agentUrl()}/api/status`, { cache: "no-store" });
       if (!response.ok) throw new Error("agent offline");
       setData(await response.json());
       setConnected(true);
@@ -100,7 +117,7 @@ export default function Home() {
     setBusy(path);
     setNotice("");
     try {
-      const response = await fetch(`${AGENT}${path}`, {
+      const response = await fetch(`${agentUrl()}${path}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body || {}),
@@ -121,6 +138,31 @@ export default function Home() {
     [data.models, data.server.model],
   );
   const statusText = data.server.status === "running" ? "推理服务在线" : data.server.status === "starting" ? "模型加载中" : "推理服务未启动";
+
+  const sendChat = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const content = chatInput.trim();
+    if (!content || chatBusy || data.server.status !== "running") return;
+    const nextMessages: ChatMessage[] = [...messages.filter((message, index) => !(index === 0 && message.role === "assistant")), { role: "user", content }];
+    setMessages((current) => [...current, { role: "user", content }]);
+    setChatInput("");
+    setChatBusy(true);
+    try {
+      const response = await fetch(`${agentUrl()}/api/chat`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ messages: nextMessages }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "对话失败");
+      setMessages((current) => [...current, { role: "assistant", content: result.message || "模型没有返回内容。" }]);
+      await refresh();
+    } catch (error) {
+      setMessages((current) => [...current, { role: "assistant", content: `请求失败：${error instanceof Error ? error.message : "未知错误"}` }]);
+    } finally {
+      setChatBusy(false);
+    }
+  };
 
   return (
     <main>
@@ -187,6 +229,40 @@ export default function Home() {
         </article>
       </section>
 
+      <section className="panel chat-panel">
+        <div className="panel-title chat-title">
+          <div><p>本地对话</p><h2>与当前模型聊天</h2></div>
+          <div className="current-model"><small>当前使用</small><strong>{data.server.model || "尚未加载模型"}</strong></div>
+        </div>
+        <div className="chat-messages">
+          {messages.map((message, index) => (
+            <div className={`chat-message ${message.role}`} key={`${message.role}-${index}`}>
+              <span>{message.role === "user" ? "你" : "AI"}</span>
+              <p>{message.content}</p>
+            </div>
+          ))}
+          {chatBusy && <div className="chat-message assistant"><span>AI</span><p className="typing">正在生成回答<span>···</span></p></div>}
+        </div>
+        <form className="chat-compose" onSubmit={sendChat}>
+          <textarea
+            aria-label="对话内容"
+            value={chatInput}
+            onChange={(event) => setChatInput(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                event.currentTarget.form?.requestSubmit();
+              }
+            }}
+            placeholder={data.server.status === "running" ? "输入消息，Enter 发送，Shift + Enter 换行…" : "请先从模型库加载一个模型"}
+            disabled={data.server.status !== "running" || chatBusy}
+          />
+          <button className="primary send-button" type="submit" disabled={!chatInput.trim() || chatBusy || data.server.status !== "running"}>
+            {chatBusy ? "生成中" : "发送"}
+          </button>
+        </form>
+      </section>
+
       <section className="workspace">
         <article className="panel models-panel">
           <div className="panel-title">
@@ -222,15 +298,25 @@ export default function Home() {
           <article className="panel store-panel">
             <div className="panel-title"><div><p>模型商店</p><h2>推荐模型</h2></div></div>
             {data.catalog.map((item) => {
-              const downloaded = data.models.some((model) => model.name === item.file);
+              const downloaded = item.installed;
               const download = data.downloads.find((entry) => entry.id === item.id);
-              const percent = download?.total ? Math.round(download.received / download.total * 100) : 0;
+              const percent = download?.total ? Math.min(100, Math.round(download.received / download.total * 100)) : 0;
               return (
                 <div className="store-row" key={item.id}>
-                  <div><strong>{item.name}</strong><span>{item.description} · {item.sizeLabel}</span></div>
-                  {download?.status === "downloading" ? <span className="download-progress">{percent}%</span> :
+                  <div>
+                    <strong>{item.name}{item.multimodal && <b className="vision-tag">VISION</b>}</strong>
+                    <span>{item.description} · {item.sizeLabel}</span>
+                  </div>
+                  {download?.status === "downloading" ? <span className="download-progress">{percent}% · {downloadSpeed(download.speed)}</span> :
                     <button disabled={downloaded || !!busy} onClick={() => action("/api/models/download", { id: item.id })}>{downloaded ? "已下载" : "下载"}</button>}
-                  {download?.status === "downloading" && <div className="download-bar"><span style={{ width: `${percent}%` }} /></div>}
+                  {download?.status === "downloading" && <>
+                    <div className="download-meta">
+                      <span>{bytes(download.received)} / {bytes(download.total)}</span>
+                      <span>{download.filesComplete}/{download.filesTotal} 文件 · {download.currentFile}</span>
+                    </div>
+                    <div className="download-bar"><span style={{ width: `${percent}%` }} /></div>
+                  </>}
+                  {download?.status === "error" && <div className="download-error">{download.error || "下载失败，请点击重试"}</div>}
                 </div>
               );
             })}
