@@ -1,0 +1,18 @@
+# Local models and caches
+models/*
+!models/.gitkeep
+.cache/
+
+# Upstream source and build products
+llama.cpp/
+
+# Runtime files
+run/
+*.log
+
+# macOS
+.DS_Store
+
+# Local overrides
+.env
+.env.local
