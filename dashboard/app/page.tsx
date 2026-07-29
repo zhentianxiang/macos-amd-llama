@@ -70,10 +70,21 @@ function uptime(value: number) {
   return hours > 48 ? `${Math.floor(hours / 24)} 天` : `${hours} 小时`;
 }
 
-function Ring({ value, color = "#287a4b", children }: { value: number; color?: string; children: React.ReactNode }) {
+function meterColor(value: number) {
   const safe = Math.max(0, Math.min(100, value || 0));
+  const hue = 132 - safe * 1.32;
+  return `hsl(${hue.toFixed(1)} 58% 40%)`;
+}
+
+function Ring({ value, children }: { value: number; children: React.ReactNode }) {
+  const safe = Math.max(0, Math.min(100, value || 0));
+  const color = meterColor(safe);
   return (
-    <div className="ring" style={{ background: `conic-gradient(${color} ${safe * 3.6}deg, #dce9da 0deg)` }}>
+    <div
+      className="ring"
+      title={`当前使用率 ${safe.toFixed(0)}%`}
+      style={{ background: `conic-gradient(${color} ${safe * 3.6}deg, #dce9da 0deg)` }}
+    >
       <div className="ring-core">{children}</div>
     </div>
   );
@@ -259,7 +270,7 @@ export default function Home() {
         <article className="metric-card accent">
           <div className="card-head"><span>AMD GPU</span><small>Vulkan 设备 0</small></div>
           <div className="metric-main">
-            <Ring value={data.gpu.activity} color="#ff6b38"><strong>{data.gpu.activity.toFixed(0)}%</strong><small>活动率</small></Ring>
+            <Ring value={data.gpu.activity}><strong>{data.gpu.activity.toFixed(0)}%</strong><small>活动率</small></Ring>
             <div className="metric-copy gpu-copy">
               <strong className="metric-title">{data.gpu.name}</strong>
               <div className="metric-details telemetry">
