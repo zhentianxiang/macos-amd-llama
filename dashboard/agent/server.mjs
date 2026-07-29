@@ -76,6 +76,7 @@ let serverProcess = null;
 let managedModel = null;
 let serverState = "stopped";
 let lastError = "";
+let serverStartedAt = 0;
 let lastCpu = { idle: 0, total: 0 };
 let performance = { promptTps: 0, generationTps: 0, latencyMs: 0 };
 const downloads = new Map();
@@ -167,8 +168,15 @@ async function snapshot() {
   const total = os.totalmem();
   const free = os.freemem();
   const [gpu, models, healthy] = await Promise.all([gpuInfo(), modelList(), health()]);
-  if (healthy && serverState !== "starting") serverState = "running";
-  if (!healthy && !serverProcess && serverState !== "starting") serverState = "stopped";
+  if (healthy) {
+    serverState = "running";
+    serverStartedAt = 0;
+  }
+  if (!healthy && serverState === "starting" && serverStartedAt && Date.now() - serverStartedAt > 600_000) {
+    serverState = "error";
+    lastError = "模型启动超过 10 分钟仍未通过健康检查";
+  }
+  if (!healthy && !serverProcess && !["starting", "error"].includes(serverState)) serverState = "stopped";
   if (healthy && !managedModel) managedModel = await externalModel();
   return {
     system: {
@@ -208,6 +216,7 @@ async function startModel(name) {
   if (serverProcess) await stopModel();
   if (await health()) throw new Error("端口 8080 已有外部 llama-server，请先停止它再切换模型");
   serverState = "starting";
+  serverStartedAt = Date.now();
   lastError = "";
   managedModel = name;
   const catalogItem = catalog.find((item) => item.file === name);
@@ -228,6 +237,7 @@ async function startModel(name) {
   serverProcess.on("exit", (code) => {
     if (code && code !== 0) { serverState = "error"; lastError ||= `llama-server 退出，代码 ${code}`; }
     else serverState = "stopped";
+    serverStartedAt = 0;
     serverProcess = null;
   });
 }
@@ -247,6 +257,7 @@ async function stopModel() {
   if (serverProcess === processToStop) processToStop.kill("SIGKILL");
   serverProcess = null;
   serverState = "stopped";
+  serverStartedAt = 0;
 }
 
 async function benchmark() {

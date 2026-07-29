@@ -146,7 +146,9 @@ export default function Home() {
     ? `正在运行：${modelName}`
     : data.server.status === "starting"
       ? `正在加载：${modelName}`
-      : "推理服务未启动";
+      : data.server.status === "error"
+        ? `启动失败：${data.server.lastError || modelName}`
+        : "推理服务未启动";
 
   const sendChat = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -235,7 +237,7 @@ export default function Home() {
           ) : data.server.status === "starting" ? (
             <button disabled>正在加载…</button>
           ) : (
-            <button className="primary" disabled={!!busy || !data.models.length} onClick={() => action("/api/server/start", { model: data.models[0]?.name })}>启动服务</button>
+            <button className="primary" disabled={!!busy || !data.models.length} onClick={() => action("/api/server/start", { model: data.models[0]?.name })}>{data.server.status === "error" ? "重试启动" : "启动服务"}</button>
           )}
         </div>
       </section>
