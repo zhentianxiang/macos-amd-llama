@@ -147,6 +147,142 @@ MODEL_URL="https://example.com/model.gguf" \
 ./scripts/download-model.sh
 ```
 
+## 使用 wget 下载模型
+
+Web 控制台可以直接下载模型。如果网络不稳定，也可以在命令行使用 `wget`
+下载。`wget` 的 `-c`（`--continue`）参数支持断点续传：下载中断后重新执行
+同一条命令，会从已有文件继续，而不是从头开始。
+
+macOS 默认可能没有安装 `wget`，可以通过 Homebrew 安装：
+
+```bash
+brew install wget
+```
+
+进入项目目录并创建模型文件夹：
+
+```bash
+cd macos-amd-llama
+mkdir -p models
+```
+
+默认使用 Hugging Face 官方地址：
+
+```bash
+export HF_BASE_URL="https://huggingface.co"
+```
+
+如果官方地址速度较慢，可以临时改用社区镜像：
+
+```bash
+export HF_BASE_URL="https://hf-mirror.com"
+```
+
+`hf-mirror.com` 是社区镜像，并非 Hugging Face 官方服务。不要向未知镜像
+提交 Hugging Face Token 或其他敏感凭据。如果镜像不可用，请切回官方地址。
+
+### 下载 Qwen3 8B Q4_K_M
+
+```bash
+wget -c \
+  --tries=0 \
+  --timeout=30 \
+  --read-timeout=30 \
+  -O models/Qwen3-8B-Q4_K_M.gguf \
+  "$HF_BASE_URL/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf"
+```
+
+### 下载 Qwen3 14B Q4_K_M
+
+```bash
+wget -c \
+  --tries=0 \
+  --timeout=30 \
+  --read-timeout=30 \
+  -O models/Qwen3-14B-Q4_K_M.gguf \
+  "$HF_BASE_URL/Qwen/Qwen3-14B-GGUF/resolve/main/Qwen3-14B-Q4_K_M.gguf"
+```
+
+### 下载 Gemma 3 12B Q4_K_M
+
+Gemma 3 是视觉语言模型。图片理解除了主模型，还需要下载对应的视觉投影
+文件 `mmproj`。两个文件缺一不可。
+
+下载主模型：
+
+```bash
+wget -c \
+  --tries=0 \
+  --timeout=30 \
+  --read-timeout=30 \
+  -O models/gemma-3-12b-it-Q4_K_M.gguf \
+  "$HF_BASE_URL/ggml-org/gemma-3-12b-it-GGUF/resolve/main/gemma-3-12b-it-Q4_K_M.gguf"
+```
+
+下载视觉投影文件：
+
+```bash
+wget -c \
+  --tries=0 \
+  --timeout=30 \
+  --read-timeout=30 \
+  -O models/mmproj-gemma-3-12b-f16.gguf \
+  "$HF_BASE_URL/ggml-org/gemma-3-12b-it-GGUF/resolve/main/mmproj-model-f16.gguf"
+```
+
+### 验证模型文件
+
+文件大小正确不代表内容一定完整。下载完成后应使用 SHA-256 校验，避免损坏
+模型产生乱码。
+
+验证 Qwen3 8B：
+
+```bash
+printf '%s  %s\n' \
+  "d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785" \
+  "models/Qwen3-8B-Q4_K_M.gguf" |
+  shasum -a 256 -c -
+```
+
+验证 Qwen3 14B：
+
+```bash
+printf '%s  %s\n' \
+  "500a8806e85ee9c83f3ae08420295592451379b4f8cf2d0f41c15dffeb6b81f0" \
+  "models/Qwen3-14B-Q4_K_M.gguf" |
+  shasum -a 256 -c -
+```
+
+验证 Gemma 3 主模型和视觉文件：
+
+```bash
+printf '%s  %s\n' \
+  "7bb69bff3f48a7b642355d64a90e481182a7794707b3133890646b1efa778ff5" \
+  "models/gemma-3-12b-it-Q4_K_M.gguf" |
+  shasum -a 256 -c -
+
+printf '%s  %s\n' \
+  "30c02d056410848227001830866e0a269fcc28aaf8ca971bded494003de9f5a5" \
+  "models/mmproj-gemma-3-12b-f16.gguf" |
+  shasum -a 256 -c -
+```
+
+成功时会显示：
+
+```text
+models/模型文件名.gguf: OK
+```
+
+如果显示 `FAILED`，说明文件已经损坏。应先将损坏文件改名，然后重新执行对应
+的 `wget -c` 命令：
+
+```bash
+mv models/损坏的模型.gguf models/损坏的模型.gguf.corrupt
+```
+
+下载并校验完成后，Web 控制台会在下一次刷新时自动识别模型，不需要再次点击
+“下载”。
+
 ## 运行配置
 
 `scripts/run.sh` 支持以下环境变量：
