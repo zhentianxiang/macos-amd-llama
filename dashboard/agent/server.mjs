@@ -18,7 +18,8 @@ const HOST = process.env.DASHBOARD_AGENT_HOST || "127.0.0.1";
 const PORT = Number(process.env.DASHBOARD_AGENT_PORT || 8090);
 const LLAMA_HOST = process.env.LLAMA_HOST || "127.0.0.1";
 const LLAMA_PORT = Number(process.env.LLAMA_PORT || 8080);
-const CONTEXT_SIZE = Number(process.env.CTX_SIZE || 8192);
+const CONTEXT_SIZE = Number(process.env.CTX_SIZE || 16384);
+const CHAT_MAX_TOKENS = Number(process.env.CHAT_MAX_TOKENS || 4096);
 const LLAMA_CONNECT_HOST = ["0.0.0.0", "::"].includes(LLAMA_HOST) ? "127.0.0.1" : LLAMA_HOST;
 const LLAMA_URL = `http://${LLAMA_CONNECT_HOST}:${LLAMA_PORT}`;
 const WEB_PORT = Number(process.env.DASHBOARD_WEB_PORT || 3000);
@@ -260,7 +261,14 @@ async function snapshot() {
       uptime: os.uptime(),
     },
     gpu,
-    server: { status: serverState, model: managedModel, endpoint: LLAMA_URL, contextSize: CONTEXT_SIZE, lastError },
+    server: {
+      status: serverState,
+      model: managedModel,
+      endpoint: LLAMA_URL,
+      contextSize: CONTEXT_SIZE,
+      chatMaxTokens: CHAT_MAX_TOKENS,
+      lastError,
+    },
     performance,
     models,
     downloads: [...downloads.values()],
@@ -370,7 +378,7 @@ async function chat(messages) {
   const response = await fetch(`${LLAMA_URL}/v1/chat/completions`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ model: "local", messages: safeMessages, max_tokens: 1024, temperature: 0.7 }),
+    body: JSON.stringify({ model: "local", messages: safeMessages, max_tokens: CHAT_MAX_TOKENS, temperature: 0.7 }),
     signal: AbortSignal.timeout(300000),
   });
   const result = await response.json();
@@ -391,7 +399,7 @@ async function streamChat(messages, response, origin) {
   const upstream = await fetch(`${LLAMA_URL}/v1/chat/completions`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ model: "local", messages: safeMessages, max_tokens: 1024, temperature: 0.7, stream: true }),
+    body: JSON.stringify({ model: "local", messages: safeMessages, max_tokens: CHAT_MAX_TOKENS, temperature: 0.7, stream: true }),
     signal: AbortSignal.timeout(300000),
   });
   if (!upstream.ok || !upstream.body) {

@@ -42,6 +42,7 @@ type Snapshot = {
     model: string | null;
     endpoint: string;
     contextSize: number;
+    chatMaxTokens: number;
     lastError?: string;
   };
   performance: { promptTps: number; generationTps: number; latencyMs: number; updatedAt?: string };
@@ -53,7 +54,7 @@ type Snapshot = {
 const empty: Snapshot = {
   system: { hostname: "—", platform: "macOS", cpu: "正在连接本机代理", cpuPercent: 0, cores: 0, memoryUsed: 0, memoryTotal: 0, memoryCached: 0, memoryPercent: 0, uptime: 0 },
   gpu: { name: "AMD Radeon", activity: 0, temperature: 0, power: 0, fan: 0, coreClock: 0, memoryClock: 0, vramUsed: 0, vramTotal: 0 },
-  server: { status: "stopped", model: null, endpoint: "http://127.0.0.1:8080", contextSize: 8192 },
+  server: { status: "stopped", model: null, endpoint: "http://127.0.0.1:8080", contextSize: 16384, chatMaxTokens: 4096 },
   performance: { promptTps: 0, generationTps: 0, latencyMs: 0 },
   models: [], downloads: [], catalog: [],
 };
@@ -99,6 +100,7 @@ export default function Home() {
   const [notice, setNotice] = useState("");
   const [chatInput, setChatInput] = useState("");
   const [chatBusy, setChatBusy] = useState(false);
+  const [chatPhase, setChatPhase] = useState<"idle" | "waiting" | "thinking" | "answering">("idle");
   const [chatOpen, setChatOpen] = useState(false);
   const [launcherPosition, setLauncherPosition] = useState<{ left: number; top: number } | null>(null);
   const drag = useRef({ active: false, moved: false, offsetX: 0, offsetY: 0 });
@@ -175,6 +177,7 @@ export default function Home() {
     setMessages((current) => [...current, { role: "user", content }]);
     setChatInput("");
     setChatBusy(true);
+    setChatPhase("waiting");
     try {
       setMessages((current) => [...current, { role: "assistant", content: "" }]);
       const response = await fetch(`${agentUrl()}/api/chat/stream`, {
@@ -199,10 +202,24 @@ export default function Home() {
           const payload = eventText.split("\n").find((line) => line.startsWith("data: "))?.slice(6);
           if (!payload || payload === "[DONE]") continue;
           const eventData = JSON.parse(payload);
-          const delta = eventData.choices?.[0]?.delta?.content || "";
+          const choice = eventData.choices?.[0];
+          const reasoningDelta = choice?.delta?.reasoning_content || "";
+          const delta = choice?.delta?.content || "";
+          if (reasoningDelta) setChatPhase("thinking");
           if (delta) {
+            setChatPhase("answering");
             setMessages((current) => current.map((message, index) =>
               index === current.length - 1 ? { ...message, content: message.content + delta } : message
+            ));
+          }
+          if (choice?.finish_reason === "length") {
+            setMessages((current) => current.map((message, index) =>
+              index === current.length - 1
+                ? {
+                  ...message,
+                  content: `${message.content}${message.content ? "\n\n" : ""}> 回答已达到单次输出上限，可回复“继续”接着生成。`,
+                }
+                : message
             ));
           }
         }
@@ -216,6 +233,7 @@ export default function Home() {
       ));
     } finally {
       setChatBusy(false);
+      setChatPhase("idle");
     }
   };
 
@@ -399,7 +417,9 @@ export default function Home() {
       {chatOpen && <aside className="floating-chat">
         <div className="floating-chat-head">
           <div>
-            <small>当前模型 · 上下文 {data.server.contextSize || 8192} tokens · {conversationTurns} 轮</small>
+            <small>
+              当前模型 · 上下文 {data.server.contextSize || 16384} · 单次 {data.server.chatMaxTokens || 4096} tokens · {conversationTurns} 轮
+            </small>
             <strong>{data.server.model || "尚未加载模型"}</strong>
           </div>
           <div className="chat-head-actions">
@@ -424,8 +444,8 @@ export default function Home() {
                     {chatBusy && index === messages.length - 1 && <i className="stream-cursor" aria-label="仍在生成" />}
                   </>
                   : chatBusy && index === messages.length - 1
-                    ? <div className="typing-indicator" aria-label="模型正在生成">
-                      <span /><span /><span /><em>模型正在生成</em>
+                    ? <div className="typing-indicator" aria-label={chatPhase === "thinking" ? "模型正在思考" : "模型正在生成"}>
+                      <span /><span /><span /><em>{chatPhase === "thinking" ? "模型正在思考" : "模型正在生成"}</em>
                     </div>
                     : null}
               </div>
