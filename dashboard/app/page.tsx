@@ -79,10 +79,6 @@ function Ring({ value, color = "#287a4b", children }: { value: number; color?: s
   );
 }
 
-function Bar({ value }: { value: number }) {
-  return <div className="bar"><span style={{ width: `${Math.max(1, Math.min(100, value || 0))}%` }} /></div>;
-}
-
 export default function Home() {
   const [data, setData] = useState<Snapshot>(empty);
   const [connected, setConnected] = useState(false);
@@ -258,22 +254,47 @@ export default function Home() {
           <div className="card-head"><span>AMD GPU</span><small>Vulkan 设备 0</small></div>
           <div className="metric-main">
             <Ring value={data.gpu.activity} color="#ff6b38"><strong>{data.gpu.activity.toFixed(0)}%</strong><small>活动率</small></Ring>
-            <div className="metric-copy"><strong>{data.gpu.name}</strong><span>{data.gpu.temperature || "—"}°C · {data.gpu.power || "—"} W · {data.gpu.fan || "—"} RPM</span></div>
+            <div className="metric-copy gpu-copy">
+              <strong>{data.gpu.name}</strong>
+              <div className="telemetry">
+                <span><small>温度</small>{data.gpu.temperature ? `${data.gpu.temperature} °C` : "—"}</span>
+                <span><small>功耗</small>{data.gpu.power ? `${data.gpu.power} W` : "—"}</span>
+                <span><small>风扇</small>{data.gpu.fan ? `${data.gpu.fan} RPM` : "—"}</span>
+                <span><small>核心频率</small>{data.gpu.coreClock ? `${data.gpu.coreClock} MHz` : "—"}</span>
+                <span><small>显存频率</small>{data.gpu.memoryClock ? `${data.gpu.memoryClock} MHz` : "—"}</span>
+              </div>
+            </div>
           </div>
         </article>
 
         <article className="metric-card">
           <div className="card-head"><span>统一内存</span><small>{bytes(data.system.memoryTotal)}</small></div>
-          <div className="big-value">{bytes(data.system.memoryUsed)}<small> 已使用</small></div>
-          <Bar value={data.system.memoryPercent} />
-          <div className="split-label"><span>{data.system.memoryPercent.toFixed(0)}%</span><span>{bytes(data.system.memoryTotal - data.system.memoryUsed)} 可用</span></div>
+          <div className="metric-main">
+            <Ring value={data.system.memoryPercent}>
+              <strong>{data.system.memoryPercent.toFixed(0)}%</strong>
+              <small>已使用</small>
+            </Ring>
+            <div className="metric-copy memory-copy">
+              <strong>{bytes(data.system.memoryUsed)}</strong>
+              <span><small>可用</small>{bytes(Math.max(0, data.system.memoryTotal - data.system.memoryUsed))}</span>
+              <span><small>总容量</small>{bytes(data.system.memoryTotal)}</span>
+            </div>
+          </div>
         </article>
 
         <article className="metric-card">
           <div className="card-head"><span>显存 VRAM</span><small>{bytes(data.gpu.vramTotal)}</small></div>
-          <div className="big-value">{bytes(data.gpu.vramUsed)}<small> 已使用</small></div>
-          <Bar value={data.gpu.vramTotal ? data.gpu.vramUsed / data.gpu.vramTotal * 100 : 0} />
-          <div className="split-label"><span>{data.gpu.coreClock || "—"} MHz 核心</span><span>{data.gpu.memoryClock || "—"} MHz 显存</span></div>
+          <div className="metric-main">
+            <Ring value={data.gpu.vramTotal ? data.gpu.vramUsed / data.gpu.vramTotal * 100 : 0}>
+              <strong>{data.gpu.vramTotal ? (data.gpu.vramUsed / data.gpu.vramTotal * 100).toFixed(0) : "0"}%</strong>
+              <small>已使用</small>
+            </Ring>
+            <div className="metric-copy memory-copy">
+              <strong>{bytes(data.gpu.vramUsed)}</strong>
+              <span><small>可用</small>{bytes(Math.max(0, data.gpu.vramTotal - data.gpu.vramUsed))}</span>
+              <span><small>总容量</small>{bytes(data.gpu.vramTotal)}</span>
+            </div>
+          </div>
         </article>
       </section>
 
