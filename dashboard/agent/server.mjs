@@ -36,6 +36,7 @@ const catalog = [
     multimodal: false,
     artifacts: [{
       file: "Qwen3-8B-Q4_K_M.gguf",
+      size: 5027783488,
       url: "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf",
     }],
   },
@@ -50,10 +51,12 @@ const catalog = [
     artifacts: [
       {
         file: "gemma-3-12b-it-Q4_K_M.gguf",
+        size: 7300574976,
         url: "https://huggingface.co/ggml-org/gemma-3-12b-it-GGUF/resolve/main/gemma-3-12b-it-Q4_K_M.gguf",
       },
       {
         file: "mmproj-gemma-3-12b-f16.gguf",
+        size: 854200224,
         url: "https://huggingface.co/ggml-org/gemma-3-12b-it-GGUF/resolve/main/mmproj-model-f16.gguf",
       },
     ],
@@ -67,6 +70,7 @@ const catalog = [
     multimodal: false,
     artifacts: [{
       file: "Qwen3-14B-Q4_K_M.gguf",
+      size: 9001752960,
       url: "https://huggingface.co/Qwen/Qwen3-14B-GGUF/resolve/main/Qwen3-14B-Q4_K_M.gguf",
     }],
   },
@@ -377,9 +381,7 @@ async function runDownload(item, state) {
         state.filesComplete += 1;
         continue;
       }
-      const head = await fetch(artifact.url, { method: "HEAD", redirect: "follow" });
-      if (!head.ok) throw new Error(`无法获取 ${artifact.file}：HTTP ${head.status}`);
-      const size = Number(head.headers.get("content-length") || 0);
+      const size = artifact.size;
       state.total += size;
       pending.push({ ...artifact, destination, size });
     }
