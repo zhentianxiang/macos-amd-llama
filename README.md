@@ -38,6 +38,29 @@ compatibility guarantee.
 - Starts an OpenAI-compatible API on localhost
 - Includes hardware diagnostics and an API smoke test
 - Keeps models, upstream source, and build products out of Git
+- Includes a local Web console for hardware metrics and model management
+
+## Web console / Web 控制台
+
+首次安装前端依赖：
+
+```bash
+make dashboard-install
+```
+
+打开两个终端，分别运行：
+
+```bash
+make dashboard-agent
+make dashboard-web
+```
+
+访问 <http://localhost:3000>。控制台实时显示 CPU、系统内存、GPU 活动率、显存、
+温度、功耗和推理速度，并支持下载、启动与切换 GGUF 模型。
+
+控制代理仅监听 `127.0.0.1:8090`，llama-server 仅监听 `127.0.0.1:8080`。
+如果 8080 已存在手工启动的 llama-server，面板会显示其在线状态，但不会停止或
+替换该外部进程，以避免误杀其他服务。
 
 ## Requirements / 环境要求
 

@@ -16,3 +16,10 @@ run/
 # Local overrides
 .env
 .env.local
+
+# Web dashboard build and dependency caches
+dashboard/node_modules/
+dashboard/.npm-cache/
+dashboard/.next/
+dashboard/.wrangler/
+dashboard/dist/

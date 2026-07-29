@@ -25,5 +25,6 @@ exec "$BUILD_DIR/bin/llama-server" \
   --n-gpu-layers "$GPU_LAYERS" \
   --flash-attn off \
   --ctx-size "$CTX_SIZE" \
+  --metrics \
   --host "$SERVER_HOST" \
   --port "$SERVER_PORT"
