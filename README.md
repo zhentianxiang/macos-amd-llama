@@ -36,6 +36,10 @@ llama.cpp -> Vulkan -> MoltenVK -> AMD Radeon GPU
 - 模型、上游源码和构建产物不会提交到 Git
 - 提供本地 Web 控制台，用于硬件监控和模型管理
 
+图像理解、浮点向量生成、Qdrant 存储和相似图片检索尚在规划中，详细状态、
+接口草案与实施顺序请查看
+[图像理解与向量检索路线图](./VISION_VECTOR_ROADMAP.md)。
+
 ## 快速开始
 
 ### 环境要求
