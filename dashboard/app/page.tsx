@@ -44,7 +44,7 @@ type Snapshot = {
   };
   performance: { promptTps: number; generationTps: number; latencyMs: number; updatedAt?: string };
   models: Array<{ name: string; size: number; path: string; active: boolean }>;
-  downloads: Array<{ id: string; name: string; received: number; total: number; speed: number; currentFile: string; filesComplete: number; filesTotal: number; status: string; error?: string }>;
+  downloads: Array<{ id: string; name: string; received: number; total: number; speed: number; currentFile: string; filesComplete: number; filesTotal: number; retryAttempt: number; status: string; error?: string }>;
   catalog: Array<{ id: string; name: string; file: string; sizeLabel: string; description: string; multimodal: boolean; installed: boolean }>;
 };
 
@@ -321,13 +321,15 @@ export default function Home() {
                     <strong>{item.name}{item.multimodal && <b className="vision-tag">VISION</b>}</strong>
                     <span>{item.description} · {item.sizeLabel}</span>
                   </div>
-                  {download?.status === "downloading" ? <span className="download-progress">{percent}% · {downloadSpeed(download.speed)}</span> :
+                  {download?.status === "queued" ? <span className="download-progress">等待下载</span> :
+                    download?.status === "downloading" ? <span className="download-progress">{percent}% · {downloadSpeed(download.speed)}</span> :
                     <button disabled={downloaded || !!busy} onClick={() => action("/api/models/download", { id: item.id })}>{downloaded ? "已下载" : "下载"}</button>}
                   {download?.status === "downloading" && <>
                     <div className="download-meta">
                       <span>{bytes(download.received)} / {bytes(download.total)}</span>
                       <span>{download.filesComplete}/{download.filesTotal} 文件 · {download.currentFile}</span>
                     </div>
+                    {download.error && <div className="download-retrying">{download.error}</div>}
                     <div className="download-bar"><span style={{ width: `${percent}%` }} /></div>
                   </>}
                   {download?.status === "error" && <div className="download-error">{download.error || "下载失败，请点击重试"}</div>}

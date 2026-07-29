@@ -80,6 +80,7 @@ let serverStartedAt = 0;
 let lastCpu = { idle: 0, total: 0 };
 let performance = { promptTps: 0, generationTps: 0, latencyMs: 0 };
 const downloads = new Map();
+let downloadQueue = Promise.resolve();
 
 function cpuTimes() {
   return os.cpus().reduce((sum, cpu) => {
@@ -358,10 +359,97 @@ async function streamChat(messages, response, origin) {
   response.end();
 }
 
+const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+async function runDownload(item, state) {
+  try {
+    state.status = "downloading";
+    state.startedAt = Date.now();
+    state.error = "";
+    let transferred = 0;
+    const pending = [];
+    for (const artifact of item.artifacts) {
+      const destination = path.join(MODELS, artifact.file);
+      if (fs.existsSync(destination)) {
+        const stat = await fsp.stat(destination);
+        state.received += stat.size;
+        state.total += stat.size;
+        state.filesComplete += 1;
+        continue;
+      }
+      const head = await fetch(artifact.url, { method: "HEAD", redirect: "follow" });
+      if (!head.ok) throw new Error(`无法获取 ${artifact.file}：HTTP ${head.status}`);
+      const size = Number(head.headers.get("content-length") || 0);
+      state.total += size;
+      pending.push({ ...artifact, destination, size });
+    }
+
+    for (const artifact of pending) {
+      state.currentFile = artifact.file;
+      const temp = `${artifact.destination}.part`;
+      const completedBefore = state.received;
+      let finished = false;
+      for (let attempt = 1; attempt <= 8 && !finished; attempt += 1) {
+        let stream;
+        try {
+          const existing = fs.existsSync(temp) ? (await fsp.stat(temp)).size : 0;
+          state.received = completedBefore + existing;
+          state.retryAttempt = attempt - 1;
+          state.error = "";
+          const response = await fetch(artifact.url, {
+            headers: existing ? { Range: `bytes=${existing}-` } : {},
+            redirect: "follow",
+          });
+          if ((!response.ok && response.status !== 206) || !response.body) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+          const canResume = existing > 0 && response.status === 206;
+          if (!canResume) state.received = completedBefore;
+          stream = fs.createWriteStream(temp, { flags: canResume ? "a" : "w" });
+          for await (const chunk of response.body) {
+            state.received += chunk.length;
+            transferred += chunk.length;
+            state.speed = transferred / Math.max(1, (Date.now() - state.startedAt) / 1000);
+            if (!stream.write(chunk)) await new Promise((resolve) => stream.once("drain", resolve));
+          }
+          await new Promise((resolve, reject) => stream.end((error) => error ? reject(error) : resolve()));
+          stream = null;
+          const actualSize = (await fsp.stat(temp)).size;
+          if (artifact.size && actualSize !== artifact.size) {
+            throw new Error(`文件不完整：${actualSize}/${artifact.size}`);
+          }
+          await fsp.rename(temp, artifact.destination);
+          state.filesComplete += 1;
+          state.received = completedBefore + actualSize;
+          finished = true;
+        } catch (error) {
+          stream?.destroy();
+          if (attempt === 8) throw error;
+          const delaySeconds = Math.min(30, 2 ** attempt);
+          state.retryAttempt = attempt;
+          state.speed = 0;
+          state.error = `连接中断，${delaySeconds} 秒后自动续传（${attempt}/8）`;
+          await wait(delaySeconds * 1000);
+        }
+      }
+    }
+    state.received = state.total;
+    state.speed = 0;
+    state.currentFile = "";
+    state.retryAttempt = 0;
+    state.error = "";
+    state.status = "complete";
+  } catch (error) {
+    state.status = "error";
+    state.error = `自动重试失败：${error instanceof Error ? error.message : String(error)}`;
+    state.speed = 0;
+  }
+}
+
 async function downloadModel(id) {
   const item = catalog.find((entry) => entry.id === id);
   if (!item) throw new Error("不支持的模型");
-  if (downloads.get(id)?.status === "downloading") return;
+  if (["queued", "downloading"].includes(downloads.get(id)?.status)) return;
   if (item.artifacts.every((artifact) => fs.existsSync(path.join(MODELS, artifact.file)))) {
     throw new Error("模型已下载");
   }
@@ -375,64 +463,13 @@ async function downloadModel(id) {
     currentFile: "",
     filesComplete: 0,
     filesTotal: item.artifacts.length,
-    status: "downloading",
-    startedAt: Date.now(),
+    retryAttempt: 0,
+    status: "queued",
+    startedAt: 0,
+    error: "",
   };
   downloads.set(id, state);
-  void (async () => {
-    try {
-      let transferred = 0;
-      const pending = [];
-      for (const artifact of item.artifacts) {
-        const destination = path.join(MODELS, artifact.file);
-        if (fs.existsSync(destination)) {
-          const stat = await fsp.stat(destination);
-          state.received += stat.size;
-          state.total += stat.size;
-          state.filesComplete += 1;
-          continue;
-        }
-        const head = await fetch(artifact.url, { method: "HEAD", redirect: "follow" });
-        if (!head.ok) throw new Error(`无法获取 ${artifact.file}：HTTP ${head.status}`);
-        const size = Number(head.headers.get("content-length") || 0);
-        state.total += size;
-        pending.push({ ...artifact, destination });
-      }
-
-      for (const artifact of pending) {
-        state.currentFile = artifact.file;
-        const temp = `${artifact.destination}.part`;
-        const existing = fs.existsSync(temp) ? (await fsp.stat(temp)).size : 0;
-        const response = await fetch(artifact.url, {
-          headers: existing ? { Range: `bytes=${existing}-` } : {},
-          redirect: "follow",
-        });
-        if ((!response.ok && response.status !== 206) || !response.body) {
-          throw new Error(`下载 ${artifact.file} 失败：HTTP ${response.status}`);
-        }
-        const canResume = existing > 0 && response.status === 206;
-        if (canResume) state.received += existing;
-        const stream = fs.createWriteStream(temp, { flags: canResume ? "a" : "w" });
-        for await (const chunk of response.body) {
-          state.received += chunk.length;
-          transferred += chunk.length;
-          state.speed = transferred / Math.max(1, (Date.now() - state.startedAt) / 1000);
-          if (!stream.write(chunk)) await new Promise((resolve) => stream.once("drain", resolve));
-        }
-        await new Promise((resolve, reject) => stream.end((error) => error ? reject(error) : resolve()));
-        await fsp.rename(temp, artifact.destination);
-        state.filesComplete += 1;
-      }
-      state.received = state.total;
-      state.speed = 0;
-      state.currentFile = "";
-      state.status = "complete";
-    } catch (error) {
-      state.status = "error";
-      state.error = error instanceof Error ? error.message : String(error);
-      state.speed = 0;
-    }
-  })();
+  downloadQueue = downloadQueue.then(() => runDownload(item, state));
 }
 
 async function jsonBody(request) {
