@@ -246,7 +246,13 @@ export default function Home() {
           <div className="card-head"><span>CPU</span><small>{data.system.cores} 线程</small></div>
           <div className="metric-main">
             <Ring value={data.system.cpuPercent}><strong>{data.system.cpuPercent.toFixed(0)}%</strong><small>使用率</small></Ring>
-            <div className="metric-copy"><strong>{data.system.cpu.replace(/\(R\)|\(TM\)/g, "")}</strong><span>系统运行 {uptime(data.system.uptime)}</span></div>
+            <div className="metric-copy">
+              <strong className="metric-title">{data.system.cpu.replace(/\(R\)|\(TM\)/g, "")}</strong>
+              <div className="metric-details">
+                <span><small>当前使用率</small>{data.system.cpuPercent.toFixed(0)}%</span>
+                <span><small>系统运行</small>{uptime(data.system.uptime)}</span>
+              </div>
+            </div>
           </div>
         </article>
 
@@ -255,8 +261,8 @@ export default function Home() {
           <div className="metric-main">
             <Ring value={data.gpu.activity} color="#ff6b38"><strong>{data.gpu.activity.toFixed(0)}%</strong><small>活动率</small></Ring>
             <div className="metric-copy gpu-copy">
-              <strong>{data.gpu.name}</strong>
-              <div className="telemetry">
+              <strong className="metric-title">{data.gpu.name}</strong>
+              <div className="metric-details telemetry">
                 <span><small>温度</small>{data.gpu.temperature ? `${data.gpu.temperature} °C` : "—"}</span>
                 <span><small>功耗</small>{data.gpu.power ? `${data.gpu.power} W` : "—"}</span>
                 <span><small>风扇</small>{data.gpu.fan ? `${data.gpu.fan} RPM` : "—"}</span>
@@ -275,9 +281,12 @@ export default function Home() {
               <small>已使用</small>
             </Ring>
             <div className="metric-copy memory-copy">
-              <strong>{bytes(data.system.memoryUsed)}</strong>
-              <span><small>可用</small>{bytes(Math.max(0, data.system.memoryTotal - data.system.memoryUsed))}</span>
-              <span><small>总容量</small>{bytes(data.system.memoryTotal)}</span>
+              <strong className="metric-title">{bytes(data.system.memoryUsed)}</strong>
+              <div className="metric-details">
+                <span><small>已使用</small>{bytes(data.system.memoryUsed)}</span>
+                <span><small>可用</small>{bytes(Math.max(0, data.system.memoryTotal - data.system.memoryUsed))}</span>
+                <span><small>总容量</small>{bytes(data.system.memoryTotal)}</span>
+              </div>
             </div>
           </div>
         </article>
@@ -290,9 +299,12 @@ export default function Home() {
               <small>已使用</small>
             </Ring>
             <div className="metric-copy memory-copy">
-              <strong>{bytes(data.gpu.vramUsed)}</strong>
-              <span><small>可用</small>{bytes(Math.max(0, data.gpu.vramTotal - data.gpu.vramUsed))}</span>
-              <span><small>总容量</small>{bytes(data.gpu.vramTotal)}</span>
+              <strong className="metric-title">{bytes(data.gpu.vramUsed)}</strong>
+              <div className="metric-details">
+                <span><small>已使用</small>{bytes(data.gpu.vramUsed)}</span>
+                <span><small>可用</small>{bytes(Math.max(0, data.gpu.vramTotal - data.gpu.vramUsed))}</span>
+                <span><small>总容量</small>{bytes(data.gpu.vramTotal)}</span>
+              </div>
             </div>
           </div>
         </article>
