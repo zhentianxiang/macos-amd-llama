@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
 
 const configuredAgent = process.env.NEXT_PUBLIC_AGENT_URL;
 const agentPort = process.env.NEXT_PUBLIC_AGENT_PORT || "8090";
@@ -89,6 +90,9 @@ export default function Home() {
   const [notice, setNotice] = useState("");
   const [chatInput, setChatInput] = useState("");
   const [chatBusy, setChatBusy] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [launcherPosition, setLauncherPosition] = useState<{ left: number; top: number } | null>(null);
+  const drag = useRef({ active: false, moved: false, offsetX: 0, offsetY: 0 });
   const [messages, setMessages] = useState<ChatMessage[]>([
     { role: "assistant", content: "你好，我是当前运行在 AMD GPU 上的本地模型。启动模型后，可以直接在这里与我对话。" },
   ]);
@@ -137,7 +141,12 @@ export default function Home() {
     () => data.models.find((model) => model.active) || data.models.find((model) => model.name === data.server.model),
     [data.models, data.server.model],
   );
-  const statusText = data.server.status === "running" ? "推理服务在线" : data.server.status === "starting" ? "模型加载中" : "推理服务未启动";
+  const modelName = data.server.model?.replace(/\.gguf$/i, "") || "未知模型";
+  const statusText = data.server.status === "running"
+    ? `正在运行：${modelName}`
+    : data.server.status === "starting"
+      ? `正在加载：${modelName}`
+      : "推理服务未启动";
 
   const sendChat = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -148,20 +157,55 @@ export default function Home() {
     setChatInput("");
     setChatBusy(true);
     try {
-      const response = await fetch(`${agentUrl()}/api/chat`, {
+      setMessages((current) => [...current, { role: "assistant", content: "" }]);
+      const response = await fetch(`${agentUrl()}/api/chat/stream`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ messages: nextMessages }),
       });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || "对话失败");
-      setMessages((current) => [...current, { role: "assistant", content: result.message || "模型没有返回内容。" }]);
+      if (!response.ok || !response.body) {
+        const result = await response.json().catch(() => ({}));
+        throw new Error(result.error || "对话失败");
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split("\n\n");
+        buffer = events.pop() || "";
+        for (const eventText of events) {
+          const payload = eventText.split("\n").find((line) => line.startsWith("data: "))?.slice(6);
+          if (!payload || payload === "[DONE]") continue;
+          const eventData = JSON.parse(payload);
+          const delta = eventData.choices?.[0]?.delta?.content || "";
+          if (delta) {
+            setMessages((current) => current.map((message, index) =>
+              index === current.length - 1 ? { ...message, content: message.content + delta } : message
+            ));
+          }
+        }
+      }
       await refresh();
     } catch (error) {
-      setMessages((current) => [...current, { role: "assistant", content: `请求失败：${error instanceof Error ? error.message : "未知错误"}` }]);
+      setMessages((current) => current.map((message, index) =>
+        index === current.length - 1 && message.role === "assistant"
+          ? { ...message, content: `请求失败：${error instanceof Error ? error.message : "未知错误"}` }
+          : message
+      ));
     } finally {
       setChatBusy(false);
     }
+  };
+
+  const moveLauncher = (event: React.PointerEvent<HTMLButtonElement>) => {
+    if (!drag.current.active) return;
+    const left = Math.max(12, Math.min(window.innerWidth - 70, event.clientX - drag.current.offsetX));
+    const top = Math.max(12, Math.min(window.innerHeight - 70, event.clientY - drag.current.offsetY));
+    if (Math.abs(event.movementX) + Math.abs(event.movementY) > 1) drag.current.moved = true;
+    setLauncherPosition({ left, top });
   };
 
   return (
@@ -188,6 +232,8 @@ export default function Home() {
           <div><small>LLAMA SERVER</small><strong>{statusText}</strong></div>
           {data.server.status === "running" ? (
             <button className="ghost danger" disabled={!!busy} onClick={() => action("/api/server/stop")}>停止服务</button>
+          ) : data.server.status === "starting" ? (
+            <button disabled>正在加载…</button>
           ) : (
             <button className="primary" disabled={!!busy || !data.models.length} onClick={() => action("/api/server/start", { model: data.models[0]?.name })}>启动服务</button>
           )}
@@ -227,40 +273,6 @@ export default function Home() {
           <Bar value={data.gpu.vramTotal ? data.gpu.vramUsed / data.gpu.vramTotal * 100 : 0} />
           <div className="split-label"><span>{data.gpu.coreClock || "—"} MHz 核心</span><span>{data.gpu.memoryClock || "—"} MHz 显存</span></div>
         </article>
-      </section>
-
-      <section className="panel chat-panel">
-        <div className="panel-title chat-title">
-          <div><p>本地对话</p><h2>与当前模型聊天</h2></div>
-          <div className="current-model"><small>当前使用</small><strong>{data.server.model || "尚未加载模型"}</strong></div>
-        </div>
-        <div className="chat-messages">
-          {messages.map((message, index) => (
-            <div className={`chat-message ${message.role}`} key={`${message.role}-${index}`}>
-              <span>{message.role === "user" ? "你" : "AI"}</span>
-              <p>{message.content}</p>
-            </div>
-          ))}
-          {chatBusy && <div className="chat-message assistant"><span>AI</span><p className="typing">正在生成回答<span>···</span></p></div>}
-        </div>
-        <form className="chat-compose" onSubmit={sendChat}>
-          <textarea
-            aria-label="对话内容"
-            value={chatInput}
-            onChange={(event) => setChatInput(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                event.currentTarget.form?.requestSubmit();
-              }
-            }}
-            placeholder={data.server.status === "running" ? "输入消息，Enter 发送，Shift + Enter 换行…" : "请先从模型库加载一个模型"}
-            disabled={data.server.status !== "running" || chatBusy}
-          />
-          <button className="primary send-button" type="submit" disabled={!chatInput.trim() || chatBusy || data.server.status !== "running"}>
-            {chatBusy ? "生成中" : "发送"}
-          </button>
-        </form>
       </section>
 
       <section className="workspace">
@@ -325,6 +337,57 @@ export default function Home() {
       </section>
 
       <footer><span>AMD Local AI Console</span><span>数据每 2 秒刷新 · 仅限本机访问</span><span>{activeModel ? `当前：${activeModel.name}` : "等待加载模型"}</span></footer>
+
+      {chatOpen && <aside className="floating-chat">
+        <div className="floating-chat-head">
+          <div><small>当前模型</small><strong>{data.server.model || "尚未加载模型"}</strong></div>
+          <button aria-label="关闭聊天窗口" onClick={() => setChatOpen(false)}>×</button>
+        </div>
+        <div className="chat-messages">
+          {messages.map((message, index) => (
+            <div className={`chat-message ${message.role}`} key={`${message.role}-${index}`}>
+              <span>{message.role === "user" ? "你" : "AI"}</span>
+              <div className="markdown"><ReactMarkdown>{message.content || (chatBusy && index === messages.length - 1 ? "正在生成回答…" : "")}</ReactMarkdown></div>
+            </div>
+          ))}
+        </div>
+        <form className="chat-compose" onSubmit={sendChat}>
+          <textarea
+            aria-label="对话内容"
+            value={chatInput}
+            onChange={(event) => setChatInput(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                event.currentTarget.form?.requestSubmit();
+              }
+            }}
+            placeholder={data.server.status === "running" ? "输入消息，Enter 发送…" : "请先加载模型"}
+            disabled={data.server.status !== "running" || chatBusy}
+          />
+          <button className="primary send-button" type="submit" disabled={!chatInput.trim() || chatBusy || data.server.status !== "running"}>
+            {chatBusy ? "生成中" : "发送"}
+          </button>
+        </form>
+      </aside>}
+      <button
+        className={`ai-launcher ${chatOpen ? "open" : ""}`}
+        style={launcherPosition ? { left: launcherPosition.left, top: launcherPosition.top, right: "auto", bottom: "auto" } : undefined}
+        aria-label="打开本地 AI 对话"
+        onPointerDown={(event) => {
+          const rect = event.currentTarget.getBoundingClientRect();
+          drag.current = { active: true, moved: false, offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top };
+          event.currentTarget.setPointerCapture(event.pointerId);
+        }}
+        onPointerMove={moveLauncher}
+        onPointerUp={() => {
+          if (!drag.current.moved) setChatOpen((value) => !value);
+          drag.current.active = false;
+        }}
+      >
+        AI
+        <span className={data.server.status === "running" ? "online" : ""} />
+      </button>
     </main>
   );
 }

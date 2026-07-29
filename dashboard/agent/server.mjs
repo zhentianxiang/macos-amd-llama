@@ -268,17 +268,21 @@ async function benchmark() {
   return performance;
 }
 
-async function chat(messages) {
-  if (!await health()) throw new Error("推理服务未启动，请先加载一个模型");
+function safeChatMessages(messages) {
   if (!Array.isArray(messages) || messages.length === 0 || messages.length > 50) {
     throw new Error("对话消息数量无效");
   }
-  const safeMessages = messages.map((message) => {
+  return messages.map((message) => {
     if (!["user", "assistant", "system"].includes(message?.role) || typeof message?.content !== "string") {
       throw new Error("对话消息格式无效");
     }
     return { role: message.role, content: message.content.slice(0, 20_000) };
   });
+}
+
+async function chat(messages) {
+  if (!await health()) throw new Error("推理服务未启动，请先加载一个模型");
+  const safeMessages = safeChatMessages(messages);
   const started = Date.now();
   const response = await fetch(`${LLAMA_URL}/v1/chat/completions`, {
     method: "POST",
@@ -295,6 +299,52 @@ async function chat(messages) {
     updatedAt: new Date().toISOString(),
   };
   return { message: result.choices?.[0]?.message?.content || "", performance };
+}
+
+async function streamChat(messages, response, origin) {
+  if (!await health()) throw new Error("推理服务未启动，请先加载一个模型");
+  const safeMessages = safeChatMessages(messages);
+  const started = Date.now();
+  const upstream = await fetch(`${LLAMA_URL}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "local", messages: safeMessages, max_tokens: 1024, temperature: 0.7, stream: true }),
+    signal: AbortSignal.timeout(300000),
+  });
+  if (!upstream.ok || !upstream.body) {
+    const result = await upstream.json().catch(() => ({}));
+    throw new Error(result.error?.message || "模型对话失败");
+  }
+  response.writeHead(200, {
+    "content-type": "text/event-stream; charset=utf-8",
+    "access-control-allow-origin": allowedOrigins.has(origin) ? origin : `http://localhost:${WEB_PORT}`,
+    "cache-control": "no-cache, no-transform",
+    connection: "keep-alive",
+  });
+  const decoder = new TextDecoder();
+  let inspectBuffer = "";
+  for await (const chunk of upstream.body) {
+    response.write(chunk);
+    inspectBuffer += decoder.decode(chunk, { stream: true });
+    const events = inspectBuffer.split("\n\n");
+    inspectBuffer = events.pop() || "";
+    for (const event of events) {
+      const data = event.split("\n").find((line) => line.startsWith("data: "))?.slice(6);
+      if (!data || data === "[DONE]") continue;
+      try {
+        const parsed = JSON.parse(data);
+        if (parsed.timings) {
+          performance = {
+            promptTps: Number(parsed.timings.prompt_per_second || 0),
+            generationTps: Number(parsed.timings.predicted_per_second || 0),
+            latencyMs: Date.now() - started,
+            updatedAt: new Date().toISOString(),
+          };
+        }
+      } catch {}
+    }
+  }
+  response.end();
 }
 
 async function downloadModel(id) {
@@ -378,7 +428,7 @@ async function jsonBody(request) {
   let body = "";
   for await (const chunk of request) {
     body += chunk;
-    if (body.length > 16_384) throw new Error("请求过大");
+    if (body.length > 1_048_576) throw new Error("请求过大");
   }
   return body ? JSON.parse(body) : {};
 }
@@ -403,6 +453,10 @@ const app = http.createServer(async (request, response) => {
     if (request.method === "GET" && url.pathname === "/api/status") return send(response, 200, await snapshot(), origin);
     if (request.method !== "POST") return send(response, 404, { error: "未找到接口" }, origin);
     const body = await jsonBody(request);
+    if (url.pathname === "/api/chat/stream") {
+      await streamChat(body.messages, response, origin);
+      return;
+    }
     if (url.pathname === "/api/server/start") { await startModel(body.model); return send(response, 202, { message: "模型正在加载" }, origin); }
     if (url.pathname === "/api/server/stop") { await stopModel(); return send(response, 200, { message: "推理服务已停止" }, origin); }
     if (url.pathname === "/api/server/switch") { await startModel(body.model); return send(response, 202, { message: `正在切换到 ${body.model}` }, origin); }
@@ -411,6 +465,10 @@ const app = http.createServer(async (request, response) => {
     if (url.pathname === "/api/chat") return send(response, 200, await chat(body.messages), origin);
     return send(response, 404, { error: "未找到接口" }, origin);
   } catch (error) {
+    if (response.headersSent) {
+      response.end();
+      return;
+    }
     send(response, 400, { error: error instanceof Error ? error.message : String(error) }, origin);
   }
 });
