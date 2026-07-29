@@ -18,6 +18,7 @@ const HOST = process.env.DASHBOARD_AGENT_HOST || "127.0.0.1";
 const PORT = Number(process.env.DASHBOARD_AGENT_PORT || 8090);
 const LLAMA_HOST = process.env.LLAMA_HOST || "127.0.0.1";
 const LLAMA_PORT = Number(process.env.LLAMA_PORT || 8080);
+const CONTEXT_SIZE = Number(process.env.CTX_SIZE || 8192);
 const LLAMA_CONNECT_HOST = ["0.0.0.0", "::"].includes(LLAMA_HOST) ? "127.0.0.1" : LLAMA_HOST;
 const LLAMA_URL = `http://${LLAMA_CONNECT_HOST}:${LLAMA_PORT}`;
 const WEB_PORT = Number(process.env.DASHBOARD_WEB_PORT || 3000);
@@ -259,7 +260,7 @@ async function snapshot() {
       uptime: os.uptime(),
     },
     gpu,
-    server: { status: serverState, model: managedModel, endpoint: LLAMA_URL, lastError },
+    server: { status: serverState, model: managedModel, endpoint: LLAMA_URL, contextSize: CONTEXT_SIZE, lastError },
     performance,
     models,
     downloads: [...downloads.values()],

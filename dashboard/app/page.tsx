@@ -41,6 +41,7 @@ type Snapshot = {
     status: "running" | "starting" | "stopped" | "error";
     model: string | null;
     endpoint: string;
+    contextSize: number;
     lastError?: string;
   };
   performance: { promptTps: number; generationTps: number; latencyMs: number; updatedAt?: string };
@@ -52,7 +53,7 @@ type Snapshot = {
 const empty: Snapshot = {
   system: { hostname: "—", platform: "macOS", cpu: "正在连接本机代理", cpuPercent: 0, cores: 0, memoryUsed: 0, memoryTotal: 0, memoryCached: 0, memoryPercent: 0, uptime: 0 },
   gpu: { name: "AMD Radeon", activity: 0, temperature: 0, power: 0, fan: 0, coreClock: 0, memoryClock: 0, vramUsed: 0, vramTotal: 0 },
-  server: { status: "stopped", model: null, endpoint: "http://127.0.0.1:8080" },
+  server: { status: "stopped", model: null, endpoint: "http://127.0.0.1:8080", contextSize: 8192 },
   performance: { promptTps: 0, generationTps: 0, latencyMs: 0 },
   models: [], downloads: [], catalog: [],
 };
@@ -101,6 +102,7 @@ export default function Home() {
   const [chatOpen, setChatOpen] = useState(false);
   const [launcherPosition, setLauncherPosition] = useState<{ left: number; top: number } | null>(null);
   const drag = useRef({ active: false, moved: false, offsetX: 0, offsetY: 0 });
+  const chatMessagesRef = useRef<HTMLDivElement>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([
     { role: "assistant", content: "你好，我是当前运行在 AMD GPU 上的本地模型。启动模型后，可以直接在这里与我对话。" },
   ]);
@@ -124,6 +126,12 @@ export default function Home() {
       clearInterval(timer);
     };
   }, []);
+
+  useEffect(() => {
+    if (!chatOpen) return;
+    const container = chatMessagesRef.current;
+    if (container) container.scrollTop = container.scrollHeight;
+  }, [messages, chatBusy, chatOpen]);
 
   const action = async (path: string, body?: unknown) => {
     setBusy(path);
@@ -150,6 +158,7 @@ export default function Home() {
     [data.models, data.server.model],
   );
   const modelName = data.server.model?.replace(/\.gguf$/i, "") || "未知模型";
+  const conversationTurns = messages.filter((message) => message.role === "user").length;
   const statusText = data.server.status === "running"
     ? `正在运行：${modelName}`
     : data.server.status === "starting"
@@ -389,14 +398,37 @@ export default function Home() {
 
       {chatOpen && <aside className="floating-chat">
         <div className="floating-chat-head">
-          <div><small>当前模型</small><strong>{data.server.model || "尚未加载模型"}</strong></div>
-          <button aria-label="关闭聊天窗口" onClick={() => setChatOpen(false)}>×</button>
+          <div>
+            <small>当前模型 · 上下文 {data.server.contextSize || 8192} tokens · {conversationTurns} 轮</small>
+            <strong>{data.server.model || "尚未加载模型"}</strong>
+          </div>
+          <div className="chat-head-actions">
+            <button
+              className="clear-chat"
+              disabled={chatBusy || conversationTurns === 0}
+              onClick={() => setMessages([{ role: "assistant", content: "上下文已清空。可以开始新的对话。" }])}
+            >
+              清空上下文
+            </button>
+            <button className="close-chat" aria-label="关闭聊天窗口" onClick={() => setChatOpen(false)}>×</button>
+          </div>
         </div>
-        <div className="chat-messages">
+        <div className="chat-messages" ref={chatMessagesRef}>
           {messages.map((message, index) => (
             <div className={`chat-message ${message.role}`} key={`${message.role}-${index}`}>
               <span>{message.role === "user" ? "你" : "AI"}</span>
-              <div className="markdown"><ReactMarkdown>{message.content || (chatBusy && index === messages.length - 1 ? "正在生成回答…" : "")}</ReactMarkdown></div>
+              <div className="markdown">
+                {message.content
+                  ? <>
+                    <ReactMarkdown>{message.content}</ReactMarkdown>
+                    {chatBusy && index === messages.length - 1 && <i className="stream-cursor" aria-label="仍在生成" />}
+                  </>
+                  : chatBusy && index === messages.length - 1
+                    ? <div className="typing-indicator" aria-label="模型正在生成">
+                      <span /><span /><span /><em>模型正在生成</em>
+                    </div>
+                    : null}
+              </div>
             </div>
           ))}
         </div>
