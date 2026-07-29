@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -37,6 +38,7 @@ const catalog = [
     artifacts: [{
       file: "Qwen3-8B-Q4_K_M.gguf",
       size: 5027783488,
+      sha256: "d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785",
       url: "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf",
     }],
   },
@@ -52,11 +54,13 @@ const catalog = [
       {
         file: "gemma-3-12b-it-Q4_K_M.gguf",
         size: 7300574976,
+        sha256: "7bb69bff3f48a7b642355d64a90e481182a7794707b3133890646b1efa778ff5",
         url: "https://huggingface.co/ggml-org/gemma-3-12b-it-GGUF/resolve/main/gemma-3-12b-it-Q4_K_M.gguf",
       },
       {
         file: "mmproj-gemma-3-12b-f16.gguf",
         size: 854200224,
+        sha256: "30c02d056410848227001830866e0a269fcc28aaf8ca971bded494003de9f5a5",
         url: "https://huggingface.co/ggml-org/gemma-3-12b-it-GGUF/resolve/main/mmproj-model-f16.gguf",
       },
     ],
@@ -71,6 +75,7 @@ const catalog = [
     artifacts: [{
       file: "Qwen3-14B-Q4_K_M.gguf",
       size: 9001752960,
+      sha256: "500a8806e85ee9c83f3ae08420295592451379b4f8cf2d0f41c15dffeb6b81f0",
       url: "https://huggingface.co/Qwen/Qwen3-14B-GGUF/resolve/main/Qwen3-14B-Q4_K_M.gguf",
     }],
   },
@@ -85,6 +90,37 @@ let lastCpu = { idle: 0, total: 0 };
 let performance = { promptTps: 0, generationTps: 0, latencyMs: 0 };
 const downloads = new Map();
 let downloadQueue = Promise.resolve();
+const verificationCache = new Map();
+
+async function fileSha256(filePath) {
+  return new Promise((resolve, reject) => {
+    const hash = createHash("sha256");
+    const input = fs.createReadStream(filePath);
+    input.on("error", reject);
+    input.on("data", (chunk) => hash.update(chunk));
+    input.on("end", () => resolve(hash.digest("hex")));
+  });
+}
+
+async function artifactVerified(artifact) {
+  const filePath = path.join(MODELS, artifact.file);
+  try {
+    const stat = await fsp.stat(filePath);
+    if (artifact.size && stat.size !== artifact.size) return false;
+    if (!artifact.sha256) return true;
+    const cacheKey = `${filePath}:${stat.size}:${stat.mtimeMs}`;
+    if (!verificationCache.has(cacheKey)) {
+      verificationCache.set(cacheKey, fileSha256(filePath).then((hash) => hash === artifact.sha256));
+    }
+    return await verificationCache.get(cacheKey);
+  } catch {
+    return false;
+  }
+}
+
+async function modelInstalled(item) {
+  return (await Promise.all(item.artifacts.map(artifactVerified))).every(Boolean);
+}
 
 function cpuTimes() {
   return os.cpus().reduce((sum, cpu) => {
@@ -143,7 +179,7 @@ async function modelList() {
   for (const entry of entries) {
     if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".gguf") || entry.name.toLowerCase().startsWith("mmproj")) continue;
     const catalogItem = catalog.find((item) => item.file === entry.name);
-    if (catalogItem?.mmproj && !fs.existsSync(path.join(MODELS, catalogItem.mmproj))) continue;
+    if (catalogItem && !await modelInstalled(catalogItem)) continue;
     const fullPath = path.join(MODELS, entry.name);
     const stat = await fsp.stat(fullPath);
     result.push({ name: entry.name, size: stat.size, path: fullPath, active: entry.name === managedModel && serverState === "running" });
@@ -200,13 +236,13 @@ async function snapshot() {
     performance,
     models,
     downloads: [...downloads.values()],
-    catalog: catalog.map((entry) => {
+    catalog: await Promise.all(catalog.map(async (entry) => {
       const item = { ...entry };
       delete item.artifacts;
       delete item.mmproj;
-      item.installed = entry.artifacts.every((artifact) => fs.existsSync(path.join(MODELS, artifact.file)));
+      item.installed = await modelInstalled(entry);
       return item;
-    }),
+    })),
   };
 }
 
@@ -218,13 +254,16 @@ async function startModel(name) {
   if (!validModel(name)) throw new Error("模型名称无效");
   const modelPath = path.join(MODELS, name);
   await fsp.access(modelPath, fs.constants.R_OK);
+  const catalogItem = catalog.find((item) => item.file === name);
+  if (catalogItem && !await modelInstalled(catalogItem)) {
+    throw new Error("模型完整性校验失败，请重新下载");
+  }
   if (serverProcess) await stopModel();
   if (await health()) throw new Error("端口 8080 已有外部 llama-server，请先停止它再切换模型");
   serverState = "starting";
   serverStartedAt = Date.now();
   lastError = "";
   managedModel = name;
-  const catalogItem = catalog.find((item) => item.file === name);
   const mmprojPath = catalogItem?.mmproj ? path.join(MODELS, catalogItem.mmproj) : "";
   if (mmprojPath) await fsp.access(mmprojPath, fs.constants.R_OK);
   serverProcess = spawn(path.join(ROOT, "scripts/run.sh"), [], {
@@ -420,6 +459,10 @@ async function runDownload(item, state) {
           if (artifact.size && actualSize !== artifact.size) {
             throw new Error(`文件不完整：${actualSize}/${artifact.size}`);
           }
+          if (artifact.sha256 && await fileSha256(temp) !== artifact.sha256) {
+            await fsp.truncate(temp, 0);
+            throw new Error("SHA-256 校验失败，已清空损坏的临时文件");
+          }
           await fsp.rename(temp, artifact.destination);
           state.filesComplete += 1;
           state.received = completedBefore + actualSize;
@@ -452,10 +495,19 @@ async function downloadModel(id) {
   const item = catalog.find((entry) => entry.id === id);
   if (!item) throw new Error("不支持的模型");
   if (["queued", "downloading"].includes(downloads.get(id)?.status)) return;
-  if (item.artifacts.every((artifact) => fs.existsSync(path.join(MODELS, artifact.file)))) {
+  if (await modelInstalled(item)) {
     throw new Error("模型已下载");
   }
   await fsp.mkdir(MODELS, { recursive: true });
+  for (const artifact of item.artifacts) {
+    const artifactPath = path.join(MODELS, artifact.file);
+    if (fs.existsSync(artifactPath) && !await artifactVerified(artifact)) {
+      const suffix = `.corrupt-${Date.now()}`;
+      await fsp.rename(artifactPath, `${artifactPath}${suffix}`);
+      const partialPath = `${artifactPath}.part`;
+      if (fs.existsSync(partialPath)) await fsp.rename(partialPath, `${partialPath}${suffix}`);
+    }
+  }
   const state = {
     id,
     name: item.name,
