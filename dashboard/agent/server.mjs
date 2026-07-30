@@ -135,6 +135,8 @@ let managedModel = null;
 let serverState = "stopped";
 let lastError = "";
 let serverStartedAt = 0;
+let activeContextSize = CONTEXT_SIZE;
+let activeRuntimeSummary = "";
 let lastCpu = { idle: 0, total: 0 };
 let performance = { promptTps: 0, generationTps: 0, latencyMs: 0 };
 const downloads = new Map();
@@ -312,8 +314,9 @@ async function snapshot() {
       status: serverState,
       model: managedModel,
       endpoint: LLAMA_URL,
-      contextSize: CONTEXT_SIZE,
+      contextSize: activeContextSize,
       chatMaxTokens: CHAT_MAX_TOKENS,
+      runtimeSummary: activeRuntimeSummary,
       lastError,
     },
     performance,
@@ -333,6 +336,43 @@ function validModel(name) {
   return typeof name === "string" && path.basename(name) === name && name.toLowerCase().endsWith(".gguf");
 }
 
+function runtimeProfile(item) {
+  if (!item?.id.startsWith("gemma4-")) {
+    return { env: {}, contextSize: CONTEXT_SIZE, summary: `默认配置 · ${CONTEXT_SIZE} ctx` };
+  }
+
+  const memoryGiB = os.totalmem() / 1024 ** 3;
+  const is26B = item.id.includes("26b");
+  const is31B = item.id.includes("31b");
+  if ((is26B || is31B) && memoryGiB < 28) {
+    throw new Error(`${item.name} 至少建议 32 GB 系统内存，当前仅检测到 ${memoryGiB.toFixed(1)} GB`);
+  }
+
+  if (is26B || is31B) {
+    const contextSize = is31B ? (memoryGiB >= 48 ? 8192 : 4096) : (memoryGiB >= 32 ? 8192 : 4096);
+    const fitTarget = is31B ? "2048" : "1536";
+    return {
+      contextSize,
+      env: {
+        GPU_LAYERS: "auto",
+        CTX_SIZE: String(contextSize),
+        LLAMA_ARG_FIT: "on",
+        LLAMA_ARG_FIT_TARGET: fitTarget,
+        LLAMA_ARG_CACHE_TYPE_K: "q8_0",
+        LLAMA_ARG_CACHE_TYPE_V: "q8_0",
+        LLAMA_ARG_MMPROJ_OFFLOAD: "false",
+      },
+      summary: `自动内存分担 · ${contextSize} ctx · Q8 KV · 预留 ${fitTarget} MiB 显存`,
+    };
+  }
+
+  return {
+    contextSize: CONTEXT_SIZE,
+    env: {},
+    summary: `全显存优先 · ${CONTEXT_SIZE} ctx`,
+  };
+}
+
 async function startModel(name) {
   if (!validModel(name)) throw new Error("模型名称无效");
   const modelPath = path.join(MODELS, name);
@@ -347,11 +387,20 @@ async function startModel(name) {
   serverStartedAt = Date.now();
   lastError = "";
   managedModel = name;
+  const profile = runtimeProfile(catalogItem);
+  activeContextSize = profile.contextSize;
+  activeRuntimeSummary = profile.summary;
   const mmprojPath = catalogItem?.mmproj ? path.join(MODELS, catalogItem.mmproj) : "";
   if (mmprojPath) await fsp.access(mmprojPath, fs.constants.R_OK);
   serverProcess = spawn(path.join(ROOT, "scripts/run.sh"), [], {
     cwd: ROOT,
-    env: { ...process.env, MODEL_PATH: modelPath, MMPROJ_PATH: mmprojPath, LLAMA_PORT: String(LLAMA_PORT) },
+    env: {
+      ...process.env,
+      ...profile.env,
+      MODEL_PATH: modelPath,
+      MMPROJ_PATH: mmprojPath,
+      LLAMA_PORT: String(LLAMA_PORT),
+    },
     stdio: ["ignore", "pipe", "pipe"],
   });
   const onLog = (chunk) => {
@@ -385,6 +434,7 @@ async function stopModel() {
   serverProcess = null;
   serverState = "stopped";
   serverStartedAt = 0;
+  activeRuntimeSummary = "";
 }
 
 async function benchmark() {
@@ -418,7 +468,7 @@ function safeChatMessages(messages) {
   });
 }
 
-async function chat(messages) {
+async function chat(messages, enableThinking = CHAT_ENABLE_THINKING) {
   if (!await health()) throw new Error("推理服务未启动，请先加载一个模型");
   const safeMessages = safeChatMessages(messages);
   const started = Date.now();
@@ -430,7 +480,7 @@ async function chat(messages) {
       messages: safeMessages,
       max_tokens: CHAT_MAX_TOKENS,
       temperature: 0.7,
-      chat_template_kwargs: { enable_thinking: CHAT_ENABLE_THINKING },
+      chat_template_kwargs: { enable_thinking: enableThinking === true },
     }),
     signal: AbortSignal.timeout(300000),
   });
@@ -445,7 +495,7 @@ async function chat(messages) {
   return { message: result.choices?.[0]?.message?.content || "", performance };
 }
 
-async function streamChat(messages, response, origin) {
+async function streamChat(messages, response, origin, enableThinking = CHAT_ENABLE_THINKING) {
   if (!await health()) throw new Error("推理服务未启动，请先加载一个模型");
   const safeMessages = safeChatMessages(messages);
   const started = Date.now();
@@ -458,7 +508,7 @@ async function streamChat(messages, response, origin) {
       max_tokens: CHAT_MAX_TOKENS,
       temperature: 0.7,
       stream: true,
-      chat_template_kwargs: { enable_thinking: CHAT_ENABLE_THINKING },
+      chat_template_kwargs: { enable_thinking: enableThinking === true },
     }),
     signal: AbortSignal.timeout(300000),
   });
@@ -652,15 +702,21 @@ const app = http.createServer(async (request, response) => {
     if (request.method !== "POST") return send(response, 404, { error: "未找到接口" }, origin);
     const body = await jsonBody(request);
     if (url.pathname === "/api/chat/stream") {
-      await streamChat(body.messages, response, origin);
+      await streamChat(body.messages, response, origin, body.enableThinking);
       return;
     }
-    if (url.pathname === "/api/server/start") { await startModel(body.model); return send(response, 202, { message: "模型正在加载" }, origin); }
+    if (url.pathname === "/api/server/start") {
+      await startModel(body.model);
+      return send(response, 202, { message: `模型正在加载 · ${activeRuntimeSummary}` }, origin);
+    }
     if (url.pathname === "/api/server/stop") { await stopModel(); return send(response, 200, { message: "推理服务已停止" }, origin); }
-    if (url.pathname === "/api/server/switch") { await startModel(body.model); return send(response, 202, { message: `正在切换到 ${body.model}` }, origin); }
+    if (url.pathname === "/api/server/switch") {
+      await startModel(body.model);
+      return send(response, 202, { message: `正在切换到 ${body.model} · ${activeRuntimeSummary}` }, origin);
+    }
     if (url.pathname === "/api/models/download") { await downloadModel(body.id); return send(response, 202, { message: "下载已经开始" }, origin); }
     if (url.pathname === "/api/inference/benchmark") return send(response, 200, { message: "速度测试完成", performance: await benchmark() }, origin);
-    if (url.pathname === "/api/chat") return send(response, 200, await chat(body.messages), origin);
+    if (url.pathname === "/api/chat") return send(response, 200, await chat(body.messages, body.enableThinking), origin);
     return send(response, 404, { error: "未找到接口" }, origin);
   } catch (error) {
     if (response.headersSent) {

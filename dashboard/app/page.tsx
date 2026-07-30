@@ -11,7 +11,7 @@ function agentUrl() {
   return `http://${hostname}:${agentPort}`;
 }
 
-type ChatMessage = { role: "user" | "assistant"; content: string };
+type ChatMessage = { role: "user" | "assistant"; content: string; reasoning?: string };
 
 type Snapshot = {
   system: {
@@ -43,6 +43,7 @@ type Snapshot = {
     endpoint: string;
     contextSize: number;
     chatMaxTokens: number;
+    runtimeSummary?: string;
     lastError?: string;
   };
   performance: { promptTps: number; generationTps: number; latencyMs: number; updatedAt?: string };
@@ -100,6 +101,7 @@ export default function Home() {
   const [notice, setNotice] = useState("");
   const [chatInput, setChatInput] = useState("");
   const [chatBusy, setChatBusy] = useState(false);
+  const [thinkingEnabled, setThinkingEnabled] = useState(false);
   const [chatPhase, setChatPhase] = useState<"idle" | "waiting" | "thinking" | "answering">("idle");
   const [chatOpen, setChatOpen] = useState(false);
   const [launcherPosition, setLauncherPosition] = useState<{ left: number; top: number } | null>(null);
@@ -183,7 +185,7 @@ export default function Home() {
       const response = await fetch(`${agentUrl()}/api/chat/stream`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ messages: nextMessages }),
+        body: JSON.stringify({ messages: nextMessages, enableThinking: thinkingEnabled }),
       });
       if (!response.ok || !response.body) {
         const result = await response.json().catch(() => ({}));
@@ -205,7 +207,12 @@ export default function Home() {
           const choice = eventData.choices?.[0];
           const reasoningDelta = choice?.delta?.reasoning_content || "";
           const delta = choice?.delta?.content || "";
-          if (reasoningDelta) setChatPhase("thinking");
+          if (reasoningDelta) {
+            setChatPhase("thinking");
+            setMessages((current) => current.map((message, index) =>
+              index === current.length - 1 ? { ...message, reasoning: `${message.reasoning || ""}${reasoningDelta}` } : message
+            ));
+          }
           if (delta) {
             setChatPhase("answering");
             setMessages((current) => current.map((message, index) =>
@@ -421,8 +428,18 @@ export default function Home() {
               当前模型 · 上下文 {data.server.contextSize || 16384} · 单次 {data.server.chatMaxTokens || 4096} tokens · {conversationTurns} 轮
             </small>
             <strong>{data.server.model || "尚未加载模型"}</strong>
+            {data.server.runtimeSummary && <small>{data.server.runtimeSummary}</small>}
           </div>
           <div className="chat-head-actions">
+            <label className="think-toggle" title="开启后会显示模型的实时思考过程，但回答会明显变慢">
+              <input
+                type="checkbox"
+                checked={thinkingEnabled}
+                disabled={chatBusy}
+                onChange={(event) => setThinkingEnabled(event.target.checked)}
+              />
+              <span>思考</span>
+            </label>
             <button
               className="clear-chat"
               disabled={chatBusy || conversationTurns === 0}
@@ -438,6 +455,12 @@ export default function Home() {
             <div className={`chat-message ${message.role}`} key={`${message.role}-${index}`}>
               <span>{message.role === "user" ? "你" : "AI"}</span>
               <div className="markdown">
+                {message.reasoning && (
+                  <details className="reasoning-panel" open={chatBusy && index === messages.length - 1}>
+                    <summary>思考过程</summary>
+                    <ReactMarkdown>{message.reasoning}</ReactMarkdown>
+                  </details>
+                )}
                 {message.content
                   ? <>
                     <ReactMarkdown>{message.content}</ReactMarkdown>
