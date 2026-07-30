@@ -461,16 +461,44 @@ function safeChatMessages(messages) {
     throw new Error("对话消息数量无效");
   }
   return messages.map((message) => {
-    if (!["user", "assistant", "system"].includes(message?.role) || typeof message?.content !== "string") {
+    if (!["user", "assistant", "system"].includes(message?.role)) {
       throw new Error("对话消息格式无效");
     }
-    return { role: message.role, content: message.content.slice(0, 20_000) };
+    if (typeof message.content === "string") {
+      return { role: message.role, content: message.content.slice(0, 20_000) };
+    }
+    if (message.role !== "user" || !Array.isArray(message.content) || message.content.length > 3) {
+      throw new Error("多模态消息格式无效");
+    }
+    let imageCount = 0;
+    const content = message.content.map((part) => {
+      if (part?.type === "text" && typeof part.text === "string") {
+        return { type: "text", text: part.text.slice(0, 20_000) };
+      }
+      const url = part?.image_url?.url;
+      if (part?.type !== "image_url" || typeof url !== "string") {
+        throw new Error("图片消息格式无效");
+      }
+      imageCount += 1;
+      if (imageCount > 1) throw new Error("每条消息最多上传一张图片");
+      if (!/^data:image\/(?:jpeg|png|gif|webp|bmp);base64,/i.test(url)) {
+        throw new Error("只允许上传 JPEG、PNG、GIF、WebP 或 BMP 图片");
+      }
+      if (url.length > 8_500_000) throw new Error("图片编码后超过大小限制");
+      return { type: "image_url", image_url: { url } };
+    });
+    if (imageCount !== 1) throw new Error("多模态消息缺少图片");
+    return { role: message.role, content };
   });
 }
 
 async function chat(messages, enableThinking = CHAT_ENABLE_THINKING) {
   if (!await health()) throw new Error("推理服务未启动，请先加载一个模型");
   const safeMessages = safeChatMessages(messages);
+  if (safeMessages.some((message) => Array.isArray(message.content)) &&
+      !catalog.find((item) => item.file === managedModel)?.multimodal) {
+    throw new Error("当前模型不支持图片输入，请先启动带 VISION 标记的模型");
+  }
   const started = Date.now();
   const response = await fetch(`${LLAMA_URL}/v1/chat/completions`, {
     method: "POST",
@@ -498,6 +526,10 @@ async function chat(messages, enableThinking = CHAT_ENABLE_THINKING) {
 async function streamChat(messages, response, origin, enableThinking = CHAT_ENABLE_THINKING) {
   if (!await health()) throw new Error("推理服务未启动，请先加载一个模型");
   const safeMessages = safeChatMessages(messages);
+  if (safeMessages.some((message) => Array.isArray(message.content)) &&
+      !catalog.find((item) => item.file === managedModel)?.multimodal) {
+    throw new Error("当前模型不支持图片输入，请先启动带 VISION 标记的模型");
+  }
   const started = Date.now();
   const upstream = await fetch(`${LLAMA_URL}/v1/chat/completions`, {
     method: "POST",
@@ -676,7 +708,7 @@ async function jsonBody(request) {
   let body = "";
   for await (const chunk of request) {
     body += chunk;
-    if (body.length > 1_048_576) throw new Error("请求过大");
+    if (body.length > 12 * 1024 * 1024) throw new Error("请求过大");
   }
   return body ? JSON.parse(body) : {};
 }

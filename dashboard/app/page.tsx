@@ -11,7 +11,20 @@ function agentUrl() {
   return `http://${hostname}:${agentPort}`;
 }
 
-type ChatMessage = { role: "user" | "assistant"; content: string; reasoning?: string };
+type ChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+  reasoning?: string;
+  imageUrl?: string;
+  imageName?: string;
+};
+type ApiMessage = {
+  role: "user" | "assistant";
+  content: string | Array<
+    { type: "text"; text: string } |
+    { type: "image_url"; image_url: { url: string } }
+  >;
+};
 
 type Snapshot = {
   system: {
@@ -100,12 +113,15 @@ export default function Home() {
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState("");
   const [chatInput, setChatInput] = useState("");
+  const [pendingImage, setPendingImage] = useState<{ url: string; name: string } | null>(null);
+  const [imageError, setImageError] = useState("");
   const [chatBusy, setChatBusy] = useState(false);
   const [thinkingEnabled, setThinkingEnabled] = useState(false);
   const [chatPhase, setChatPhase] = useState<"idle" | "waiting" | "thinking" | "answering">("idle");
   const [chatOpen, setChatOpen] = useState(false);
   const [launcherPosition, setLauncherPosition] = useState<{ left: number; top: number } | null>(null);
   const drag = useRef({ active: false, moved: false, offsetX: 0, offsetY: 0 });
+  const imageInputRef = useRef<HTMLInputElement>(null);
   const chatMessagesRef = useRef<HTMLDivElement>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([
     { role: "assistant", content: "你好，我是当前运行在 AMD GPU 上的本地模型。启动模型后，可以直接在这里与我对话。" },
@@ -162,6 +178,7 @@ export default function Home() {
     [data.models, data.server.model],
   );
   const modelName = data.server.model?.replace(/\.gguf$/i, "") || "未知模型";
+  const visionEnabled = data.catalog.some((item) => item.file === data.server.model && item.multimodal);
   const conversationTurns = messages.filter((message) => message.role === "user").length;
   const statusText = data.server.status === "running"
     ? `正在运行：${modelName}`
@@ -171,13 +188,54 @@ export default function Home() {
         ? `启动失败：${data.server.lastError || modelName}`
         : "推理服务未启动";
 
+  const selectImage = (file?: File) => {
+    setImageError("");
+    if (!file) return;
+    const allowed = ["image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp"];
+    if (!allowed.includes(file.type)) {
+      setImageError("仅支持 JPEG、PNG、GIF、WebP 或 BMP");
+      return;
+    }
+    if (file.size > 6 * 1024 * 1024) {
+      setImageError("图片不能超过 6 MB");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") setPendingImage({ url: reader.result, name: file.name });
+    };
+    reader.onerror = () => setImageError("图片读取失败");
+    reader.readAsDataURL(file);
+  };
+
   const sendChat = async (event: React.FormEvent) => {
     event.preventDefault();
     const content = chatInput.trim();
-    if (!content || chatBusy || data.server.status !== "running") return;
-    const nextMessages: ChatMessage[] = [...messages.filter((message, index) => !(index === 0 && message.role === "assistant")), { role: "user", content }];
-    setMessages((current) => [...current, { role: "user", content }]);
+    if ((!content && !pendingImage) || chatBusy || data.server.status !== "running") return;
+    const userMessage: ChatMessage = {
+      role: "user",
+      content: content || "请描述这张图片。",
+      imageUrl: pendingImage?.url,
+      imageName: pendingImage?.name,
+    };
+    const nextMessages: ChatMessage[] = [
+      ...messages.filter((message, index) => !(index === 0 && message.role === "assistant")),
+      userMessage,
+    ];
+    const apiMessages: ApiMessage[] = nextMessages.map((message) => ({
+      role: message.role,
+      content: message.imageUrl
+        ? [
+          { type: "image_url" as const, image_url: { url: message.imageUrl } },
+          { type: "text" as const, text: message.content },
+        ]
+        : message.content,
+    }));
+    setMessages((current) => [...current, userMessage]);
     setChatInput("");
+    setPendingImage(null);
+    setImageError("");
+    if (imageInputRef.current) imageInputRef.current.value = "";
     setChatBusy(true);
     setChatPhase("waiting");
     try {
@@ -185,7 +243,7 @@ export default function Home() {
       const response = await fetch(`${agentUrl()}/api/chat/stream`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ messages: nextMessages, enableThinking: thinkingEnabled }),
+        body: JSON.stringify({ messages: apiMessages, enableThinking: thinkingEnabled }),
       });
       if (!response.ok || !response.body) {
         const result = await response.json().catch(() => ({}));
@@ -443,7 +501,11 @@ export default function Home() {
             <button
               className="clear-chat"
               disabled={chatBusy || conversationTurns === 0}
-              onClick={() => setMessages([{ role: "assistant", content: "上下文已清空。可以开始新的对话。" }])}
+              onClick={() => {
+                setMessages([{ role: "assistant", content: "上下文已清空。可以开始新的对话。" }]);
+                setPendingImage(null);
+                setImageError("");
+              }}
             >
               清空上下文
             </button>
@@ -455,6 +517,9 @@ export default function Home() {
             <div className={`chat-message ${message.role}`} key={`${message.role}-${index}`}>
               <span>{message.role === "user" ? "你" : "AI"}</span>
               <div className="markdown">
+                {/* Data URLs are local previews and cannot use the framework image optimizer. */}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                {message.imageUrl && <img className="chat-image" src={message.imageUrl} alt={message.imageName || "上传的图片"} />}
                 {message.reasoning && (
                   <details className="reasoning-panel" open={chatBusy && index === messages.length - 1}>
                     <summary>思考过程</summary>
@@ -476,6 +541,42 @@ export default function Home() {
           ))}
         </div>
         <form className="chat-compose" onSubmit={sendChat}>
+          {pendingImage && (
+            <div className="image-preview">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={pendingImage.url} alt={pendingImage.name} />
+              <span>{pendingImage.name}</span>
+              <button
+                type="button"
+                aria-label="移除图片"
+                onClick={() => {
+                  setPendingImage(null);
+                  if (imageInputRef.current) imageInputRef.current.value = "";
+                }}
+              >
+                ×
+              </button>
+            </div>
+          )}
+          {imageError && <div className="image-error">{imageError}</div>}
+          <input
+            ref={imageInputRef}
+            className="image-input"
+            type="file"
+            accept="image/jpeg,image/png,image/gif,image/webp,image/bmp"
+            aria-label="选择图片"
+            disabled={!visionEnabled || chatBusy}
+            onChange={(event) => selectImage(event.target.files?.[0])}
+          />
+          <button
+            className="attach-button"
+            type="button"
+            disabled={!visionEnabled || chatBusy || data.server.status !== "running"}
+            title={visionEnabled ? "上传图片" : "当前模型不支持图片输入"}
+            onClick={() => imageInputRef.current?.click()}
+          >
+            上传图片
+          </button>
           <textarea
             aria-label="对话内容"
             value={chatInput}
@@ -486,10 +587,10 @@ export default function Home() {
                 event.currentTarget.form?.requestSubmit();
               }
             }}
-            placeholder={data.server.status === "running" ? "输入消息，Enter 发送…" : "请先加载模型"}
+            placeholder={data.server.status === "running" ? (pendingImage ? "询问这张图片…" : "输入消息，Enter 发送…") : "请先加载模型"}
             disabled={data.server.status !== "running" || chatBusy}
           />
-          <button className="primary send-button" type="submit" disabled={!chatInput.trim() || chatBusy || data.server.status !== "running"}>
+          <button className="primary send-button" type="submit" disabled={(!chatInput.trim() && !pendingImage) || chatBusy || data.server.status !== "running"}>
             {chatBusy ? "生成中" : "发送"}
           </button>
         </form>
