@@ -99,7 +99,15 @@ http://127.0.0.1:8080/v1
 make dashboard-install
 ```
 
-打开两个终端，分别运行：
+一键构建前端并启动控制代理和生产 Web 服务：
+
+```bash
+make dashboard-start
+```
+
+按 `Ctrl+C` 会同时停止两个服务。
+
+开发时也可以打开两个终端，分别运行：
 
 ```bash
 make dashboard-agent
@@ -207,33 +215,6 @@ wget -c \
   "$HF_BASE_URL/Qwen/Qwen3-14B-GGUF/resolve/main/Qwen3-14B-Q4_K_M.gguf"
 ```
 
-### 下载 Gemma 3 12B Q4_K_M
-
-Gemma 3 是视觉语言模型。图片理解除了主模型，还需要下载对应的视觉投影
-文件 `mmproj`。两个文件缺一不可。
-
-下载主模型：
-
-```bash
-wget -c \
-  --tries=0 \
-  --timeout=30 \
-  --read-timeout=30 \
-  -O models/gemma-3-12b-it-Q4_K_M.gguf \
-  "$HF_BASE_URL/ggml-org/gemma-3-12b-it-GGUF/resolve/main/gemma-3-12b-it-Q4_K_M.gguf"
-```
-
-下载视觉投影文件：
-
-```bash
-wget -c \
-  --tries=0 \
-  --timeout=30 \
-  --read-timeout=30 \
-  -O models/mmproj-gemma-3-12b-f16.gguf \
-  "$HF_BASE_URL/ggml-org/gemma-3-12b-it-GGUF/resolve/main/mmproj-model-f16.gguf"
-```
-
 ### 验证模型文件
 
 文件大小正确不代表内容一定完整。下载完成后应使用 SHA-256 校验，避免损坏
@@ -254,20 +235,6 @@ printf '%s  %s\n' \
 printf '%s  %s\n' \
   "500a8806e85ee9c83f3ae08420295592451379b4f8cf2d0f41c15dffeb6b81f0" \
   "models/Qwen3-14B-Q4_K_M.gguf" |
-  shasum -a 256 -c -
-```
-
-验证 Gemma 3 主模型和视觉文件：
-
-```bash
-printf '%s  %s\n' \
-  "7bb69bff3f48a7b642355d64a90e481182a7794707b3133890646b1efa778ff5" \
-  "models/gemma-3-12b-it-Q4_K_M.gguf" |
-  shasum -a 256 -c -
-
-printf '%s  %s\n' \
-  "30c02d056410848227001830866e0a269fcc28aaf8ca971bded494003de9f5a5" \
-  "models/mmproj-gemma-3-12b-f16.gguf" |
   shasum -a 256 -c -
 ```
 

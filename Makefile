@@ -1,6 +1,6 @@
 SHELL := /bin/zsh
 
-.PHONY: setup build doctor download run test dashboard-install dashboard-agent dashboard-web dashboard-build
+.PHONY: setup build doctor download run test dashboard-install dashboard-agent dashboard-web dashboard-build dashboard-start
 
 setup:
 	./scripts/setup.sh
@@ -31,3 +31,6 @@ dashboard-web:
 
 dashboard-build:
 	cd dashboard && npm run build
+
+dashboard-start:
+	./scripts/dashboard-start.sh
