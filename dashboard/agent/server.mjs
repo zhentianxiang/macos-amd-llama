@@ -19,7 +19,8 @@ const PORT = Number(process.env.DASHBOARD_AGENT_PORT || 8090);
 const LLAMA_HOST = process.env.LLAMA_HOST || "127.0.0.1";
 const LLAMA_PORT = Number(process.env.LLAMA_PORT || 8080);
 const CONTEXT_SIZE = Number(process.env.CTX_SIZE || 16384);
-const CHAT_MAX_TOKENS = Number(process.env.CHAT_MAX_TOKENS || 4096);
+const CHAT_MAX_TOKENS = Number(process.env.CHAT_MAX_TOKENS || 1024);
+const CHAT_ENABLE_THINKING = /^(1|true|yes|on)$/i.test(process.env.CHAT_ENABLE_THINKING || "false");
 const LLAMA_CONNECT_HOST = ["0.0.0.0", "::"].includes(LLAMA_HOST) ? "127.0.0.1" : LLAMA_HOST;
 const LLAMA_URL = `http://${LLAMA_CONNECT_HOST}:${LLAMA_PORT}`;
 const WEB_PORT = Number(process.env.DASHBOARD_WEB_PORT || 3000);
@@ -424,7 +425,13 @@ async function chat(messages) {
   const response = await fetch(`${LLAMA_URL}/v1/chat/completions`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ model: "local", messages: safeMessages, max_tokens: CHAT_MAX_TOKENS, temperature: 0.7 }),
+    body: JSON.stringify({
+      model: "local",
+      messages: safeMessages,
+      max_tokens: CHAT_MAX_TOKENS,
+      temperature: 0.7,
+      chat_template_kwargs: { enable_thinking: CHAT_ENABLE_THINKING },
+    }),
     signal: AbortSignal.timeout(300000),
   });
   const result = await response.json();
@@ -445,7 +452,14 @@ async function streamChat(messages, response, origin) {
   const upstream = await fetch(`${LLAMA_URL}/v1/chat/completions`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ model: "local", messages: safeMessages, max_tokens: CHAT_MAX_TOKENS, temperature: 0.7, stream: true }),
+    body: JSON.stringify({
+      model: "local",
+      messages: safeMessages,
+      max_tokens: CHAT_MAX_TOKENS,
+      temperature: 0.7,
+      stream: true,
+      chat_template_kwargs: { enable_thinking: CHAT_ENABLE_THINKING },
+    }),
     signal: AbortSignal.timeout(300000),
   });
   if (!upstream.ok || !upstream.body) {
