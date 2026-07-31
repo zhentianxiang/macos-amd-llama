@@ -37,3 +37,6 @@ dashboard-build:
 
 dashboard-start:
 	./scripts/dashboard-start.sh
+
+embedding-adapter:
+	./scripts/run-embedding-adapter.sh

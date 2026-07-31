@@ -708,9 +708,59 @@ async function jsonBody(request) {
   let body = "";
   for await (const chunk of request) {
     body += chunk;
-    if (body.length > 12 * 1024 * 1024) throw new Error("请求过大");
+    if (body.length > 32 * 1024 * 1024) throw new Error("请求过大");
   }
   return body ? JSON.parse(body) : {};
+}
+
+// —— 图片向量适配：把 Local KB 后端的 llama.cpp 风格请求转成 llama-server 接受的格式 ——
+function stripDataUri(value) {
+  if (typeof value !== "string") return value;
+  const comma = value.indexOf(",");
+  if (comma >= 0 && value.slice(0, 5).toLowerCase().startsWith("data:")) return value.slice(comma + 1);
+  return value;
+}
+function convertEmbeddingPayload(body) {
+  if (typeof body.content === "string" && Array.isArray(body.image)) {
+    return { content: body.content, image: body.image.map(stripDataUri) };
+  }
+  if (Array.isArray(body.content)) {
+    const promptParts = [];
+    const images = [];
+    for (const item of body.content) {
+      if (item && typeof item.prompt_string === "string") promptParts.push(item.prompt_string);
+      if (item && Array.isArray(item.multimodal_data)) for (const data of item.multimodal_data) images.push(stripDataUri(data));
+    }
+    if (!promptParts.length) promptParts.push("<__media__>\n");
+    return { content: promptParts.join(""), image: images };
+  }
+  return body;
+}
+function flattenEmbeddingResponse(body) {
+  if (Array.isArray(body)) {
+    return body.map((item, index) => {
+      let emb = item?.embedding;
+      if (Array.isArray(emb) && emb.length === 1 && Array.isArray(emb[0])) emb = emb[0];
+      return { index: item?.index ?? index, embedding: emb ?? [] };
+    });
+  }
+  if (body && Array.isArray(body.data)) return { ...body, data: flattenEmbeddingResponse(body.data) };
+  return body;
+}
+async function proxyEmbeddings(body, response) {
+  const upstreamBody = convertEmbeddingPayload(body);
+  const headers = { "content-type": "application/json" };
+  const res = await fetch(`${LLAMA_URL}/embeddings`, { method: "POST", headers, body: JSON.stringify(upstreamBody) });
+  const text = await res.text();
+  let parsed;
+  try { parsed = JSON.parse(text); } catch { parsed = { error: text }; }
+  if (!res.ok) {
+    response.writeHead(res.status, { "content-type": "application/json" });
+    response.end(JSON.stringify(parsed));
+    return;
+  }
+  response.writeHead(200, { "content-type": "application/json" });
+  response.end(JSON.stringify(flattenEmbeddingResponse(parsed)));
 }
 
 function send(response, status, payload, origin) {
@@ -730,6 +780,10 @@ const app = http.createServer(async (request, response) => {
   if (origin && !allowedOrigins.has(origin)) return send(response, 403, { error: "不允许的来源" }, origin);
   try {
     const url = new URL(request.url, `http://${request.headers.host}`);
+    if (request.method === "POST" && url.pathname === "/embeddings") {
+      await proxyEmbeddings(await jsonBody(request), response);
+      return;
+    }
     if (request.method === "GET" && url.pathname === "/api/status") return send(response, 200, await snapshot(), origin);
     if (request.method !== "POST") return send(response, 404, { error: "未找到接口" }, origin);
     const body = await jsonBody(request);

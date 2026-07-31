@@ -266,12 +266,14 @@ mv models/损坏的模型.gguf models/损坏的模型.gguf.corrupt
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `MODEL_PATH` | `models/Qwen3-8B-Q4_K_M.gguf` | 模型文件的绝对或项目相对路径 |
+| `MODEL_ALIAS` | 模型文件名去掉 `.gguf` | `/v1/models` 显示的模型别名，可自定义 |
 | `LLAMA_HOST` | `127.0.0.1` | 监听地址 |
 | `LLAMA_PORT` | `8080` | HTTP 端口 |
 | `CTX_SIZE` | `16384` | 历史消息、问题和回答共享的上下文长度 |
 | `CHAT_MAX_TOKENS` | `1024` | 单次回答最多生成的 token 数 |
 | `CHAT_ENABLE_THINKING` | `false` | 是否启用模型的隐藏思考模式 |
 | `GPU_LAYERS` | `99` | 请求卸载到 GPU 的模型层数 |
+| `ENABLE_EMBEDDING` | `1` | 是否在 8080 同时开启 `/v1/embeddings` 向量接口 |
 
 ### 图片向量 worker
 
@@ -283,6 +285,8 @@ make embedding
 
 服务默认监听 `http://127.0.0.1:8092/embeddings`，请求格式为 llama.cpp 多模态 embedding，默认 Gemma 4 12B 输出 `3840` 维向量。它与 8080 的视觉聊天服务相互独立，可直接填入 Local KB 后台的“图片向量完整接口地址”，接口格式选择“llama.cpp 多模态”。
 该服务不会随 `make dashboard-start` 自动启动，需要单独运行 `make embedding`。
+如果不需要独立端口，面板加载模型后 8080 的 `/v1/embeddings` 也已默认开启，
+同一个接口地址可以同时处理聊天和向量请求。
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
