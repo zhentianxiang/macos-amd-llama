@@ -23,4 +23,4 @@ dashboard/.npm-cache/
 dashboard/.next/
 dashboard/.wrangler/
 dashboard/dist/
-logs/
+/logs/
