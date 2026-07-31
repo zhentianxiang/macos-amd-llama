@@ -53,7 +53,7 @@ export default function LogsPage() {
     if (filter === "request") return e.type === "request";
     if (filter === "error") return e.level === "error";
     return true;
-  });
+  }).slice().reverse();  // 旧在上、新在下，配合自动滚动到底部
 
   const fmtTime = (ts: number) => {
     const d = new Date(ts);
