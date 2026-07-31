@@ -99,13 +99,21 @@ http://127.0.0.1:8080/v1
 make dashboard-install
 ```
 
-一键构建前端并启动控制代理和生产 Web 服务：
+一键构建前端，并同时启动全部四个服务：
 
 ```bash
 make dashboard-start
 ```
 
-按 `Ctrl+C` 会同时停止两个服务。
+该命令会依次启动：
+
+- llama-server（OpenAI 兼容 API，默认 `127.0.0.1:8080`，通过控制代理自动加载默认模型）
+- 图片向量服务（默认 `http://127.0.0.1:8092/embeddings`）
+- 控制代理（默认 `127.0.0.1:8090`）
+- Web 控制台（默认 `http://127.0.0.1:3000`）
+
+按 `Ctrl+C` 会同时停止所有服务。8080 端口已有手工启动的 llama-server 时，
+面板会直接使用它，而不会重复启动。
 
 开发时也可以打开两个终端，分别运行：
 
@@ -130,9 +138,10 @@ make dashboard-web
 - 运行推理测速，查看提示词处理和生成速度
 - 查看 llama-server 状态与 OpenAI 兼容接口地址
 
-控制代理只监听 `127.0.0.1:8090`，llama-server 只监听
-`127.0.0.1:8080`。如果 8080 端口已有手工启动的 llama-server，
-面板会显示它处于在线状态，但不会停止或替换该外部进程，以避免误杀其他服务。
+默认情况下，Web 控制台监听 `127.0.0.1:3000`，控制代理监听
+`127.0.0.1:8090`，llama-server 监听 `127.0.0.1:8080`，图片向量服务监听
+`127.0.0.1:8092`。如果 8080 端口已有手工启动的 llama-server，面板会显示它
+处于在线状态，但不会停止或替换该外部进程，以避免误杀其他服务。
 
 ## 默认模型
 
@@ -267,6 +276,28 @@ mv models/损坏的模型.gguf models/损坏的模型.gguf.corrupt
 | `CHAT_MAX_TOKENS` | `1024` | 单次回答最多生成的 token 数 |
 | `CHAT_ENABLE_THINKING` | `false` | 是否启用模型的隐藏思考模式 |
 | `GPU_LAYERS` | `99` | 请求卸载到 GPU 的模型层数 |
+
+### 图片向量 worker
+
+项目提供独立的 llama.cpp 多模态图片向量服务，默认复用已下载的 Gemma 4 12B 模型与视觉投影：
+
+```bash
+make embedding
+```
+
+服务默认监听 `http://127.0.0.1:8092/embeddings`，请求格式为 llama.cpp 多模态 embedding，默认 Gemma 4 12B 输出 `3840` 维向量。它与 8080 的视觉聊天服务相互独立，可直接填入 Local KB 后台的“图片向量完整接口地址”，接口格式选择“llama.cpp 多模态”。
+`make dashboard-start` 也会一起启动该服务；单独调试时使用 `make embedding`。
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `EMBEDDING_MODEL_PATH` | `models/gemma-4-12b-it-qat-q4_0.gguf` | 支持视觉的 GGUF 模型 |
+| `EMBEDDING_MMPROJ_PATH` | `models/mmproj-gemma-4-12b-it-qat-q4_0.gguf` | 对应视觉投影 |
+| `EMBEDDING_HOST` | `127.0.0.1` | 图片向量监听地址 |
+| `EMBEDDING_PORT` | `8092` | 图片向量端口 |
+| `EMBEDDING_CTX_SIZE` | `4096` | embedding 上下文 |
+| `EMBEDDING_GPU_LAYERS` | `99` | 请求卸载到 GPU 的层数 |
+
+同时运行视觉聊天和图片向量会加载两份模型。显存或系统内存不足时，可把 `EMBEDDING_GPU_LAYERS` 调低，让向量 worker 使用更多 CPU/系统内存。
 
 项目根目录支持 `.env` 配置。可以从示例文件开始：
 

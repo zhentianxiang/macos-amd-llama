@@ -1,6 +1,6 @@
 SHELL := /bin/zsh
 
-.PHONY: setup build doctor download run test dashboard-install dashboard-agent dashboard-web dashboard-build dashboard-start
+.PHONY: setup build doctor download run embedding test dashboard-install dashboard-agent dashboard-web dashboard-build dashboard-start
 
 setup:
 	./scripts/setup.sh
@@ -16,6 +16,9 @@ download:
 
 run:
 	./scripts/run.sh
+
+embedding:
+	./scripts/run-embedding.sh
 
 test:
 	./scripts/test-api.sh

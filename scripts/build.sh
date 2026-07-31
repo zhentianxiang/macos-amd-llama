@@ -23,3 +23,15 @@ cmake --build "$BUILD_DIR" \
   --config Release \
   --parallel "${BUILD_JOBS:-6}" \
   --target llama-cli llama-server llama-bench
+
+# macOS records the build directory in LC_RPATH. When a build directory is
+# copied or moved to another path, @rpath lookups break even though all
+# libraries sit next to the executables. Rewrite them relative to the binary.
+BIN_DIR="$BUILD_DIR/bin"
+find "$BIN_DIR" -maxdepth 1 -type f \
+  \( -name 'llama-server' -o -name 'llama-cli' -o -name 'llama-bench' -o -name 'lib*.dylib' \) \
+  -print0 | while IFS= read -r -d '' binary; do
+  if otool -l "$binary" 2>/dev/null | grep -q "path $BIN_DIR (offset"; then
+    install_name_tool -rpath "$BIN_DIR" "@loader_path" "$binary"
+  fi
+done
