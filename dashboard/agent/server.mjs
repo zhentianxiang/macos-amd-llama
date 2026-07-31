@@ -136,6 +136,46 @@ let serverState = "stopped";
 let lastError = "";
 let serverStartedAt = 0;
 let activeContextSize = CONTEXT_SIZE;
+
+// —— 日志：内存缓冲 + 落盘到项目根目录 logs/ 按天分文件 ——
+const LOG_MAX = 500;
+const LOG_DIR = path.join(ROOT, "logs");
+const logs = [];
+function logFileFor(ts) {
+  const d = new Date(ts);
+  return path.join(LOG_DIR, `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}.log`);
+}
+function pushLog(entry) {
+  const e = { ts: Date.now(), ...entry };
+  logs.push(e);
+  if (logs.length > LOG_MAX) logs.shift();
+  // 落盘（每个对象一行 JSON）
+  try {
+    fs.mkdirSync(LOG_DIR, { recursive: true });
+    fs.appendFileSync(logFileFor(e.ts), JSON.stringify(e) + "\n");
+  } catch {}
+}
+function recordService(level, msg) { pushLog({ type: "service", level, msg: String(msg).trimEnd().slice(-800) }); }
+function recordRequest(pathName, method, status, duration, source = "", detail = "") {
+  pushLog({ type: "request", level: status >= 400 ? "error" : "info", path: pathName, method, status, duration, source, detail: String(detail).slice(-300) });
+}
+// 启动时从今天的日志文件加载最近记录
+function loadTodayLogs() {
+  try {
+    const f = logFileFor(Date.now());
+    if (!fs.existsSync(f)) return;
+    const lines = fs.readFileSync(f, "utf-8").trimEnd().split("\n").slice(-LOG_MAX);
+    for (const line of lines) { try { logs.push(JSON.parse(line)); } catch {} }
+  } catch {}
+}
+loadTodayLogs();
+function clientSource(req) {
+  const origin = req.headers.origin || "";
+  if (origin.includes("localhost:3000") || origin.includes("127.0.0.1:3000")) return "dashboard";
+  const ua = (req.headers["user-agent"] || "").toLowerCase();
+  if (ua.includes("python") || ua.includes("httpx") || ua.includes("axios")) return "local-kb";
+  return origin || "external";
+}
 let activeRuntimeSummary = "";
 let lastCpu = { idle: 0, total: 0 };
 let performance = { promptTps: 0, generationTps: 0, latencyMs: 0 };
@@ -404,9 +444,13 @@ async function startModel(name) {
     stdio: ["ignore", "pipe", "pipe"],
   });
   const onLog = (chunk) => {
-    const line = chunk.toString();
+    const line = chunk.toString().trimEnd();
+    if (!line) return;
     if (line.includes("server is listening") || line.includes("all slots are idle")) serverState = "running";
-    if (line.toLowerCase().includes("error")) lastError = line.trim().slice(-500);
+    const lower = line.toLowerCase();
+    const level = lower.includes("error") ? "error" : lower.includes("warn") ? "warn" : "info";
+    if (level === "error") lastError = line.slice(-500);
+    recordService(level, line);
   };
   serverProcess.stdout.on("data", onLog);
   serverProcess.stderr.on("data", onLog);
@@ -736,6 +780,38 @@ function convertEmbeddingPayload(body) {
   }
   return body;
 }
+function readRawBody(request) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    request.on("data", (c) => { chunks.push(c); if (Buffer.concat(chunks).length > 64 * 1024 * 1024) reject(new Error("请求过大")); });
+    request.on("end", () => resolve(Buffer.concat(chunks)));
+    request.on("error", reject);
+  });
+}
+// 透明代理 /v1/* 到 llama-server（8080），记录请求活动，支持流式响应
+async function rawPassthrough(request, response, url) {
+  const started = Date.now();
+  const source = clientSource(request);
+  const upstream = new URL(LLAMA_URL + url.pathname + url.search);
+  const headers = { "content-type": request.headers["content-type"] || "application/json" };
+  if (request.headers.authorization) headers.authorization = request.headers.authorization;
+  if (request.headers.accept) headers.accept = request.headers.accept;
+  const body = ["GET", "HEAD"].includes(request.method) ? undefined : await readRawBody(request);
+  try {
+    const res = await fetch(upstream, { method: request.method, headers, body });
+    const respHeaders = { "content-type": res.headers.get("content-type") || "application/json" };
+    if (res.headers.get("transfer-encoding") === "chunked") respHeaders["transfer-encoding"] = "chunked";
+    response.writeHead(res.status, respHeaders);
+    const buf = Buffer.from(await res.arrayBuffer());
+    response.end(buf);
+    recordRequest(url.pathname, request.method, res.status, Date.now() - started, source, res.ok ? "" : buf.toString("utf-8").slice(0, 300));
+  } catch (error) {
+    recordRequest(url.pathname, request.method, 502, Date.now() - started, source, error.message);
+    response.writeHead(502, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: error.message }));
+  }
+}
+
 function flattenEmbeddingResponse(body) {
   if (Array.isArray(body)) {
     return body.map((item, index) => {
@@ -781,8 +857,15 @@ const app = http.createServer(async (request, response) => {
   try {
     const url = new URL(request.url, `http://${request.headers.host}`);
     if (request.method === "POST" && url.pathname === "/embeddings") {
-      await proxyEmbeddings(await jsonBody(request), response);
+      const t0 = Date.now(); const src = clientSource(request);
+      try { await proxyEmbeddings(await jsonBody(request), response); recordRequest("/embeddings", "POST", 200, Date.now()-t0, src); }
+      catch (e) { recordRequest("/embeddings", "POST", 502, Date.now()-t0, src, e.message); throw e; }
       return;
+    }
+    // 透明代理 OpenAI 兼容接口到 llama-server（供 Local KB chat 等调用并记录日志）
+    if (url.pathname.startsWith("/v1/")) { await rawPassthrough(request, response, url); return; }
+    if (request.method === "GET" && url.pathname === "/api/logs") {
+      return send(response, 200, { logs: logs.slice().reverse() }, origin);
     }
     if (request.method === "GET" && url.pathname === "/api/status") return send(response, 200, await snapshot(), origin);
     if (request.method !== "POST") return send(response, 404, { error: "未找到接口" }, origin);
@@ -802,7 +885,11 @@ const app = http.createServer(async (request, response) => {
     }
     if (url.pathname === "/api/models/download") { await downloadModel(body.id); return send(response, 202, { message: "下载已经开始" }, origin); }
     if (url.pathname === "/api/inference/benchmark") return send(response, 200, { message: "速度测试完成", performance: await benchmark() }, origin);
-    if (url.pathname === "/api/chat") return send(response, 200, await chat(body.messages, body.enableThinking), origin);
+    if (url.pathname === "/api/chat") {
+      const t0 = Date.now(); const r = await chat(body.messages, body.enableThinking);
+      recordRequest("/api/chat", "POST", 200, Date.now()-t0, "dashboard");
+      return send(response, 200, r, origin);
+    }
     return send(response, 404, { error: "未找到接口" }, origin);
   } catch (error) {
     if (response.headersSent) {

@@ -320,6 +320,7 @@ export default function Home() {
         <div className="top-actions">
           <span className={`connection ${connected ? "online" : ""}`}><i />{connected ? "本机代理已连接" : "本机代理离线"}</span>
           <span className="host">{data.system.hostname}</span>
+          <a href="/logs" style={{ fontSize: 13, color: "var(--green)", textDecoration: "none" }}>推理日志</a>
         </div>
       </header>
 
